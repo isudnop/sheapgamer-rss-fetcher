@@ -6,6 +6,9 @@ The SheapGamer RSS Content Fetcher is a powerful WordPress plugin designed to au
 
 Say goodbye to manual content import and inconsistent post metadata, and welcome a smarter, more efficient way to keep your WordPress site updated with fresh content\!
 
+<img width="778" alt="Screenshot 2568-06-27 at 21 21 04" src="https://github.com/user-attachments/assets/164cb591-e793-467a-996f-8a0a686bbd37" />
+
+
 ## Features
 
   * **RSS Feed Integration:** Easily configure an RSS feed URL to fetch content from.
@@ -60,7 +63,7 @@ Once activated, you will find the plugin settings under `Settings > RSS Fetcher`
 
 3.  **Number of Posts to Fetch (Max 25):** Specify how many of the latest posts to retrieve from the RSS feed during each fetch operation.
 
-4.  **Gemini API Key:** **Crucial for AI features\!** Enter your Gemini API Key here. You can obtain this key from [Google AI Studio](https://aistudio.google.com/ or similar Google Cloud Platform credentials). This key enables the automatic slug/tag generation and intelligent title correction features. Without it, the plugin will use fallback logic for slugs and tags.
+4.  **Gemini API Key:** **Crucial for AI features\!** Enter your Gemini API Key here. You can obtain this key from [Google AI Studio](https://aistudio.google.com/)  or similar Google Cloud Platform credentials. This key enables the automatic slug/tag generation and intelligent title correction features. Without it, the plugin will use fallback logic for slugs and tags.
 
 5.  **Save Changes:** Click the "Save Changes" button to apply your settings.
 
