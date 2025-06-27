@@ -2,8 +2,8 @@
 /**
  * Plugin Name: SheapGamer RSS Content Fetcher
  * Plugin URI: https://sheapgamer.com/
- * Description: Fetches posts from a specified RSS Feed URL and creates WordPress posts with featured images and descriptions. Now with automatic tagging, custom slugs, and loading indicator.
- * Version: 1.1.1
+ * Description: Fetches posts from a specified RSS Feed URL and creates WordPress posts. Now with Gemini AI for automatic slug/tag generation.
+ * Version: 1.2.0
  * Author: Nop SheapGamer
  * Author URI: https://sheapgamer.com/
  * License: GPL2
@@ -31,7 +31,6 @@ class SheapGamer_RSS_Fetcher {
         // AJAX handler for fetching posts
         add_action( 'wp_ajax_sheapgamer_rss_fetch_posts', array( $this, 'ajax_fetch_posts' ) );
         add_action( 'wp_ajax_sheapgamer_rss_fetcher_clear_logs', array( $this, 'ajax_clear_logs' ) );
-        // NEW AJAX handler for fetching logs
         add_action( 'wp_ajax_sheapgamer_rss_fetcher_get_logs', array( $this, 'ajax_get_logs' ) );
     }
 
@@ -39,15 +38,14 @@ class SheapGamer_RSS_Fetcher {
      * Adds the plugin settings page to the WordPress admin menu.
      */
     public function add_admin_menu() {
-        // Changed from add_options_page to add_menu_page to create a top-level menu item
         add_menu_page(
-            __( 'Sheapgamer RSS Content Fetcher Settings', 'sheapgamer-rss-fetcher' ), // Page title
-            __( 'RSS Fetcher', 'sheapgamer-rss-fetcher' ),                  // Menu title
-            'edit_published_posts',                                              // Capability required to access
-            'sheapgamer-rss-fetcher',                                      // Menu slug
-            array( $this, 'settings_page_html' ),                         // Callback function to render page
-            'dashicons-rss',                                              // Icon URL (using a Dashicon for RSS)
-            6                                                             // Position in the menu order (e.g., just below Posts)
+            __( 'Sheapgamer RSS Content Fetcher Settings', 'sheapgamer-rss-fetcher' ),
+            __( 'RSS Fetcher', 'sheapgamer-rss-fetcher' ),
+            'edit_published_posts',
+            'sheapgamer-rss-fetcher',
+            array( $this, 'settings_page_html' ),
+            'dashicons-rss',
+            6
         );
     }
 
@@ -57,6 +55,9 @@ class SheapGamer_RSS_Fetcher {
     public function register_settings() {
         register_setting( 'sheapgamer_rss_fetcher_group', 'sheapgamer_rss_feed_url', array( 'sanitize_callback' => 'esc_url_raw' ) );
         register_setting( 'sheapgamer_rss_fetcher_group', 'sheapgamer_rss_post_limit', array( 'sanitize_callback' => 'absint', 'default' => 5 ) );
+        // NEW: Register Gemini API Key setting
+        register_setting( 'sheapgamer_rss_fetcher_group', 'sheapgamer_gemini_api_key', array( 'sanitize_callback' => 'sanitize_text_field' ) );
+
 
         add_settings_section(
             'sheapgamer_rss_fetcher_section',
@@ -80,6 +81,15 @@ class SheapGamer_RSS_Fetcher {
             'sheapgamer-rss-fetcher',
             'sheapgamer_rss_fetcher_section'
         );
+        
+        // NEW: Add settings field for Gemini API Key
+        add_settings_field(
+            'gemini_api_key_field',
+            __( 'Gemini API Key', 'sheapgamer-rss-fetcher' ),
+            array( $this, 'gemini_api_key_field_callback' ),
+            'sheapgamer-rss-fetcher',
+            'sheapgamer_rss_fetcher_section'
+        );
     }
 
     /**
@@ -99,6 +109,13 @@ class SheapGamer_RSS_Fetcher {
         $limit = get_option( 'sheapgamer_rss_post_limit', 5 );
         echo '<input type="number" name="sheapgamer_rss_post_limit" value="' . esc_attr( $limit ) . '" min="1" max="25" class="small-text" />';
         echo '<p class="description">' . esc_html__( 'Maximum number of latest posts to fetch from the RSS feed.', 'sheapgamer-rss-fetcher' ) . '</p>';
+    }
+
+    // NEW: Callback for Gemini API Key field
+    public function gemini_api_key_field_callback() {
+        $api_key = get_option( 'sheapgamer_gemini_api_key', '' );
+        echo '<input type="password" name="sheapgamer_gemini_api_key" value="' . esc_attr( $api_key ) . '" class="regular-text" placeholder="Enter your Gemini API Key" />';
+        echo '<p class="description">' . esc_html__( 'Get your key from Google AI Studio. This is required for automatic slug and tag generation.', 'sheapgamer-rss-fetcher' ) . '</p>';
     }
 
     /**
@@ -145,28 +162,27 @@ class SheapGamer_RSS_Fetcher {
      * Enqueues necessary admin scripts for the settings page.
      */
     public function enqueue_admin_scripts( $hook ) {
-        // Updated the hook to match the new top-level menu slug
         if ( 'toplevel_page_sheapgamer-rss-fetcher' !== $hook ) {
             return;
         }
 
         wp_enqueue_script(
             'sheapgamer-rss-fetcher-admin-script',
-            plugin_dir_url( __FILE__ ) . 'admin_rss_fetcher.js', // NEW JS FILE NAME
+            plugin_dir_url( __FILE__ ) . 'admin_rss_fetcher.js',
             array( 'jquery' ),
-            '1.0.0',
+            '1.2.0', // Incremented version
             true
         );
 
         wp_localize_script(
             'sheapgamer-rss-fetcher-admin-script',
-            'sheapgamerRssFetcher', // NEW JS OBJECT NAME
+            'sheapgamerRssFetcher',
             array(
                 'ajax_url'            => admin_url( 'admin-ajax.php' ),
                 'nonce_fetch_posts'   => wp_create_nonce( 'sheapgamer_rss_fetch_posts_nonce' ),
                 'nonce_clear_logs'    => wp_create_nonce( 'sheapgamer_rss_fetcher_clear_logs_nonce' ),
-                'nonce_get_logs'      => wp_create_nonce( 'sheapgamer_rss_fetcher_get_logs_nonce' ), // NEW NONCE for fetching logs
-                'fetching_message'    => esc_html__( 'Fetching posts... Please wait.', 'sheapgamer-rss-fetcher' ),
+                'nonce_get_logs'      => wp_create_nonce( 'sheapgamer_rss_fetcher_get_logs_nonce' ),
+                'fetching_message'    => esc_html__( 'Fetching posts... This may take a moment if using AI.', 'sheapgamer-rss-fetcher' ),
                 'fetch_success_message' => esc_html__( 'Successfully fetched and created posts!', 'sheapgamer-rss-fetcher' ),
                 'fetch_error_message' => esc_html__( 'Error fetching posts.', 'sheapgamer-rss-fetcher' ),
             )
@@ -174,7 +190,7 @@ class SheapGamer_RSS_Fetcher {
 
         wp_enqueue_style(
             'sheapgamer-rss-fetcher-admin-style',
-            plugin_dir_url( __FILE__ ) . 'admin_rss_fetcher.css', // NEW CSS FILE NAME
+            plugin_dir_url( __FILE__ ) . 'admin_rss_fetcher.css',
             array(),
             '1.0.0'
         );
@@ -185,15 +201,13 @@ class SheapGamer_RSS_Fetcher {
      */
     private function display_logs() {
         global $wpdb;
-        $table_name = $wpdb->prefix . 'sheapgamer_rss_fetcher_logs'; // NEW LOG TABLE
+        $table_name = $wpdb->prefix . 'sheapgamer_rss_fetcher_logs';
 
-        // Ensure table exists before querying. Call the static activation function directly.
         if ( $wpdb->get_var( "SHOW TABLES LIKE '$table_name'" ) != $table_name ) {
             echo '<p>' . esc_html__( 'Log table does not exist yet. Perform a fetch to create it.', 'sheapgamer-rss-fetcher' ) . '</p>';
             return;
         }
         
-        // Fetch last 50 logs, ordered by newest first
         $logs = $wpdb->get_results(
             $wpdb->prepare(
                 "SELECT * FROM {$table_name} ORDER BY timestamp DESC LIMIT %d",
@@ -215,7 +229,7 @@ class SheapGamer_RSS_Fetcher {
             echo '<tr>';
             echo '<td>' . esc_html( $log['timestamp'] ) . '</td>';
             echo '<td class="log-type-' . $log_type_class . '">' . esc_html( ucfirst($log['type']) ) . '</td>';
-            echo '<td>' . esc_html( $log['message'] ) . '</td>';
+            echo '<td>' . wp_kses_post( $log['message'] ) . '</td>';
             echo '</tr>';
         }
         echo '</tbody>';
@@ -225,16 +239,11 @@ class SheapGamer_RSS_Fetcher {
 
     /**
      * Logs a message to the custom database table.
-     *
-     * @param string $message The log message.
-     * @param string $type    The type of log (e.g., 'success', 'error', 'info').
      */
     private function _log_message( $message, $type = 'info' ) {
         global $wpdb;
         $table_name = $wpdb->prefix . 'sheapgamer_rss_fetcher_logs';
 
-        // Check if the table exists. If not, log to error_log, don't attempt DB insert.
-        // The activation hook should ensure this table exists.
         if ( $wpdb->get_var( "SHOW TABLES LIKE '$table_name'" ) != $table_name ) {
             error_log( '[SheapGamer RSS Fetcher] Log table does not exist. Cannot log message: ' . $message );
             return;
@@ -245,15 +254,14 @@ class SheapGamer_RSS_Fetcher {
             array(
                 'timestamp' => current_time( 'mysql' ),
                 'type'      => sanitize_text_field( $type ),
-                'message'   => sanitize_textarea_field( $message ),
+                'message'   => $message, // Allow HTML for links in logs
             ),
             array( '%s', '%s', '%s' )
         );
     }
 
     /**
-     * NEW AJAX handler to get and display logs.
-     * This will be called by JavaScript to refresh the log display.
+     * AJAX handler to get and display logs.
      */
     public function ajax_get_logs() {
         check_ajax_referer( 'sheapgamer_rss_fetcher_get_logs_nonce', 'nonce' );
@@ -262,25 +270,17 @@ class SheapGamer_RSS_Fetcher {
             wp_send_json_error( array( 'message' => __( 'You do not have permission to view logs.', 'sheapgamer-rss-fetcher' ) ) );
         }
 
-        ob_start(); // Start output buffering
-        $this->display_logs(); // Call the display function
-        $logs_html = ob_get_clean(); // Get the buffered output
+        ob_start();
+        $this->display_logs();
+        $logs_html = ob_get_clean();
 
         wp_send_json_success( array( 'logs_html' => $logs_html ) );
     }
 
-
     /**
      * Fetches posts from the specified RSS Feed URL.
-     *
-     * @param string $feed_url The RSS Feed URL.
-     * @param int $limit The number of posts to fetch.
-     * @return array|false Array of posts on success, false on failure.
      */
     private function _fetch_rss_posts( $feed_url, $limit ) {
-        if ( ! class_exists( 'SimplePie' ) ) {
-            require_once( ABSPATH . WPINC . '/class-simplepie.php' );
-        }
         if ( ! function_exists( 'fetch_feed' ) ) {
             require_once( ABSPATH . WPINC . '/feed.php' );
         }
@@ -338,239 +338,274 @@ class SheapGamer_RSS_Fetcher {
 
     /**
      * Downloads an image and sets it as the featured image for a post.
-     *
-     * @param string $image_url The URL of the image to download.
-     * @param int $post_id The ID of the WordPress post.
-     * @param string $alt_text Alt text for the image.
-     * @return int|bool The ID of the attached image on success, false on failure.
      */
     private function _set_featured_image_from_url( $image_url, $post_id, $alt_text = '' ) {
         if ( empty( $image_url ) ) {
             return false;
         }
-
-        // Do NOT strip query parameters from the URL, as they contain necessary hash for Facebook CDN.
-        // Instead, we will extract the proper filename for WordPress.
         
-        // Include necessary files for media handling
         require_once( ABSPATH . 'wp-admin/includes/image.php' );
         require_once( ABSPATH . 'wp-admin/includes/file.php' );
         require_once( ABSPATH . 'wp-admin/includes/media.php' );
 
-        // Set up arguments for wp_remote_get to mimic a browser request
         $args = array(
-            'timeout'   => 30, // seconds
-            'sslverify' => false, // IMPORTANT: Set to true in production if your server has proper certs.
+            'timeout'   => 30,
+            'sslverify' => false,
             'headers'   => array(
-                'Referer'    => get_site_url(), // Spoof referrer to avoid 403 Forbidden
-                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36', // Mimic a common browser User-Agent
+                'Referer'    => get_site_url(),
+                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36',
             ),
         );
 
-        // Fetch the image data using the ORIGINAL image_url (with hash)
         $response = wp_remote_get( $image_url, $args );
 
         if ( is_wp_error( $response ) ) {
-            $this->_log_message( sprintf( __( 'Failed to download image from %s via wp_remote_get: %s', 'sheapgamer-rss-fetcher' ), $image_url, $response->get_error_message() ), 'error' );
+            $this->_log_message( sprintf( __( 'Failed to download image from %s via wp_remote_get: %s', 'sheapgamer-rss-fetcher' ), esc_url($image_url), $response->get_error_message() ), 'error' );
             return false;
         }
 
         $response_code = wp_remote_retrieve_response_code( $response );
         if ( $response_code !== 200 ) {
-            $this->_log_message( sprintf( __( 'Failed to download image from %s. HTTP Status: %d. Response: %s', 'sheapgamer-rss-fetcher' ), $image_url, $response_code, wp_remote_retrieve_body($response) ), 'error' );
+            $this->_log_message( sprintf( __( 'Failed to download image from %s. HTTP Status: %d.', 'sheapgamer-rss-fetcher' ), esc_url($image_url), $response_code ), 'error' );
             return false;
         }
 
         $image_data = wp_remote_retrieve_body( $response );
-
-        // Get upload directory info
         $upload_dir = wp_upload_dir();
-        
-        // --- NEW FILENAME GENERATION LOGIC ---
-        // Extract filename and extension from the URL path, ignoring query string for this.
         $parsed_url_path = parse_url($image_url, PHP_URL_PATH);
         $original_filename = wp_basename($parsed_url_path);
-        $path_info = pathinfo($original_filename);
-        $extension = isset($path_info['extension']) ? $path_info['extension'] : 'jpg'; // Default to jpg if no extension found
-
-        // Create a base filename (without extension initially) using a unique ID or hash
-        // Using md5 hash of the original URL for a unique base filename
-        $base_filename = md5($image_url); 
-        $filename_with_ext = $base_filename . '.' . $extension;
-
+        
         // Ensure the filename is unique in the upload directory
-        $unique_filename = wp_unique_filename( $upload_dir['path'], $filename_with_ext );
+        $unique_filename = wp_unique_filename( $upload_dir['path'], $original_filename );
         $new_file = $upload_dir['path'] . '/' . $unique_filename;
-        // --- END NEW FILENAME GENERATION LOGIC ---
 
-        // Save the image data to a temporary file
         if ( false === file_put_contents( $new_file, $image_data ) ) {
-            $this->_log_message( sprintf( __( 'Failed to save downloaded image to %s for %s.', 'sheapgamer-rss-fetcher' ), $new_file, $image_url ), 'error' );
+            $this->_log_message( sprintf( __( 'Failed to save downloaded image to %s for %s.', 'sheapgamer-rss-fetcher' ), $new_file, esc_url($image_url) ), 'error' );
             return false;
         }
 
-        // Prepare file array for media_handle_sideload
         $file_array = array(
-            'name'     => $unique_filename, // Use the unique and correctly formatted filename
+            'name'     => $unique_filename,
             'tmp_name' => $new_file,
         );
 
-        // Do the actual sideloading
-        // media_handle_sideload will move the file, check its type, and create attachment.
         $attachment_id = media_handle_sideload( $file_array, $post_id, $alt_text );
 
-        // Clean up the temporary file if it still exists (media_handle_sideload usually deletes it)
         if ( file_exists( $new_file ) ) {
             @unlink( $new_file );
         }
 
         if ( is_wp_error( $attachment_id ) ) {
-            $this->_log_message( sprintf( __( 'Failed to sideload image from %s: %s', 'sheapgamer-rss-fetcher' ), $image_url, $attachment_id->get_error_error_message() ), 'error' );
+            $this->_log_message( sprintf( __( 'Failed to sideload image from %s: %s', 'sheapgamer-rss-fetcher' ), esc_url($image_url), $attachment_id->get_error_message() ), 'error' );
             return false;
         }
 
-        // Set the featured image
         set_post_thumbnail( $post_id, $attachment_id );
         
-        // Update alt text for the image if provided
         if ( ! empty( $alt_text ) ) {
             update_post_meta( $attachment_id, '_wp_attachment_image_alt', sanitize_text_field( $alt_text ) );
         }
 
-        $this->_log_message( sprintf( __( 'Successfully set featured image for post ID %d from %s.', 'sheapgamer-rss-fetcher' ), $post_id, $image_url ), 'success' );
+        $this->_log_message( sprintf( __( 'Successfully set featured image for post ID %d from %s.', 'sheapgamer-rss-fetcher' ), $post_id, esc_url($image_url) ), 'success' );
         return $attachment_id;
+    }
+    
+    /**
+     * NEW: Gets slug and tag suggestions from the Gemini API.
+     *
+     * @param string $title The post title.
+     * @param string $content The post content.
+     * @param string $api_key The Gemini API key.
+     * @return array|false Array with 'slug' and 'tags' on success, false on failure.
+     */
+    private function _get_gemini_suggestions( $title, $content, $api_key ) {
+        $this->_log_message( 'Attempting to fetch suggestions from Gemini API.', 'info' );
+
+        $api_url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=' . $api_key;
+
+        // Create a precise prompt asking for a JSON response
+        $prompt = "Analyze the following WordPress post title and content. Your task is to provide two things:\n"
+                . "1. A concise, SEO-friendly, URL-safe slug (all lowercase, words separated by hyphens).\n"
+                . "2. A comma-separated list of 5-7 highly relevant tags.\n\n"
+                . "IMPORTANT: Your entire response must be ONLY a valid JSON object. Do not include any text before or after the JSON. The JSON object must have two keys: 'slug' and 'tags'.\n\n"
+                . "Example Response Format:\n"
+                . "{\"slug\":\"example-post-title-for-seo\",\"tags\":\"tag1,tag2,another tag,keyword\"}\n\n"
+                . "--- POST DATA ---\n"
+                . "Title: \"{$title}\"\n"
+                . "Content: \"{$content}\"";
+
+        $body = array(
+            'contents' => array(
+                array(
+                    'parts' => array(
+                        array('text' => $prompt)
+                    )
+                )
+            )
+        );
+
+        $args = array(
+            'body'    => json_encode($body),
+            'headers' => array('Content-Type' => 'application/json'),
+            'timeout' => 60, // Increase timeout for AI API calls
+        );
+
+        $response = wp_remote_post( $api_url, $args );
+
+        if ( is_wp_error( $response ) ) {
+            $this->_log_message( 'Gemini API request failed: ' . $response->get_error_message(), 'error' );
+            return false;
+        }
+
+        $response_code = wp_remote_retrieve_response_code( $response );
+        $response_body = wp_remote_retrieve_body( $response );
+
+        if ( $response_code !== 200 ) {
+            $this->_log_message( "Gemini API returned non-200 status: {$response_code}. Body: " . esc_html($response_body), 'error' );
+            return false;
+        }
+        
+        $data = json_decode($response_body, true);
+        
+        $text_content = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
+
+        if ( empty($text_content) ) {
+            $this->_log_message( 'Gemini API response was empty or in an unexpected format.', 'error' );
+            return false;
+        }
+        
+        $json_string = trim( str_replace( array('```json', '```'), '', $text_content ) );
+        $suggestions = json_decode( $json_string, true );
+
+        if ( json_last_error() !== JSON_ERROR_NONE || !isset($suggestions['slug']) || !isset($suggestions['tags']) ) {
+            $this->_log_message( 'Failed to decode JSON from Gemini response or format is incorrect. Response: ' . esc_html($json_string), 'error' );
+            return false;
+        }
+
+        return $suggestions;
     }
 
     /**
      * Creates a new WordPress post from RSS data.
+     * MODIFIED to include Gemini AI integration.
      *
      * @param array $rss_item The RSS item data.
      * @return int|bool The ID of the new WordPress post on success, false on failure.
      */
     private function _create_wordpress_post( $rss_item ) {
-        // Prevent duplicates using GUID
+        $post_link_for_log = get_edit_post_link($existing_post_id, 'raw');
         $existing_post_id = $this->_get_existing_post_by_rss_guid( $rss_item['id'] );
         if ( $existing_post_id ) {
-            $this->_log_message( sprintf( __( 'RSS item GUID %s already exists as WordPress post ID %d. Skipping.', 'sheapgamer-rss-fetcher' ), $rss_item['id'], $existing_post_id ), 'info' );
+            $log_message = sprintf( 
+                __( 'RSS item GUID %s already exists as WordPress post <a href="%s" target="_blank">ID %d</a>. Skipping.', 'sheapgamer-rss-fetcher' ), 
+                esc_html($rss_item['id']), 
+                esc_url(get_edit_post_link($existing_post_id, 'raw')),
+                $existing_post_id 
+            );
+            $this->_log_message( $log_message, 'info' );
             return false;
         }
 
-        // --- TITLE LOGIC ---
         $raw_title = ! empty( $rss_item['title'] ) ? $rss_item['title'] : '';
-        $temp_title_parts = explode('.', $raw_title, 2); // Split at the first dot
-        $post_title = trim($temp_title_parts[0]); // Use the part before the first dot
+        $temp_title_parts = explode('.', $raw_title, 2);
+        $post_title = trim($temp_title_parts[0]);
 
-        if ( empty($post_title) ) { // Fallback if title is empty after splitting, or if it was empty to begin with
+        if ( empty($post_title) ) {
             $post_title = __( 'RSS Post', 'sheapgamer-rss-fetcher' ) . ' ' . uniqid();
         } else {
-             // Ensure it's not too long after dot splitting if the part before dot is long
-             $post_title = wp_trim_words( $post_title, 20, '' ); // Limit to 20 words as a safeguard
+             $post_title = wp_trim_words( $post_title, 20, '' );
         }
-        $post_title = sanitize_text_field( $post_title ); // Final sanitization
-        // --- END TITLE LOGIC ---
+        $post_title = sanitize_text_field( $post_title );
 
         $raw_post_content = ! empty( $rss_item['content'] ) ? $rss_item['content'] : '';
         
-        // --- CONTENT PROCESSING LOGIC ---
-        // 1. Remove duplicate title from the beginning of the content, case-insensitively
-        //    Ensure we compare a cleaned version of the content start with the cleaned title.
-        $cleaned_title_for_comparison = strip_tags(html_entity_decode($post_title, ENT_QUOTES, 'UTF-8'));
-        $cleaned_content_start_for_comparison = strip_tags(html_entity_decode(substr($raw_post_content, 0, strlen($cleaned_title_for_comparison) + 20), ENT_QUOTES, 'UTF-8')); // Check a bit more than title length
-
-        // Check if the cleaned content starts with the cleaned title (case-insensitive)
-        if ( ! empty($cleaned_title_for_comparison) && stripos($cleaned_content_start_for_comparison, $cleaned_title_for_comparison) === 0 ) {
-            // If it does, remove the title part from the raw content
-            $raw_post_content = substr($raw_post_content, strlen($cleaned_title_for_comparison));
-            $this->_log_message( sprintf( __( 'Removed duplicate title "%s" from content.', 'sheapgamer-rss-fetcher' ), $post_title ), 'info' );
-        }
-
-
-        // 2. Replace <br> tags with newlines
         $processed_content = str_replace( array('<br>', '<br/>', '<br />'), "\n", $raw_post_content );
-        // 3. Strip all other HTML tags
-        $processed_content = strip_tags( $processed_content );
-        // 4. Normalize multiple newlines to two newlines (paragraph break) for readability
+        $processed_content = strip_tags( $processed_content, '<a><p><h1><h2><h3><h4><h5><h6>' ); // Keep basic formatting tags
         $processed_content = preg_replace("/\n{3,}/", "\n\n", $processed_content);
-        // 5. Trim any leading/trailing whitespace
         $processed_content = trim($processed_content);
-
-        // 6. Automatically add <a> for each URL in description
-        // This regex matches URLs starting with http://, https://, ftp:// or www.
-        // It's a common pattern, but might not catch all edge cases.
-        $url_pattern = '/\b((https?|ftp):\/\/|www\.)[a-zA-Z0-9\-\.]+\.[a-zA-Z]{2,}(\/\S*)?\b/i';
-        $processed_content = preg_replace_callback( $url_pattern, function($matches) {
-            $url = $matches[0];
-            // Prepend 'http://' if URL starts with 'www.' but not 'http(s)://'
-            if (strpos($url, 'www.') === 0 && strpos($url, 'http') !== 0) {
-                $url = 'http://' . $url;
-            }
-            return '<a href="' . esc_url( $url ) . '" target="_blank" rel="noopener noreferrer">' . esc_html( $matches[0] ) . '</a>';
-        }, $processed_content );
-
-        // --- END CONTENT PROCESSING LOGIC ---
-
-        // Add "Source" link at the end of the post content if link exists
+        
+        $source_link_html = '';
         if ( ! empty( $rss_item['link'] ) ) {
-            $processed_content .= "\n\nSource: <a href=\"" . esc_url( $rss_item['link'] ) . "\" target=\"_blank\" rel=\"noopener noreferrer\">" . __( 'Source', 'sheapgamer-rss-fetcher' ) . "</a>";
+            $source_link_html = "\n\n<p>Source: <a href=\"" . esc_url( $rss_item['link'] ) . "\" target=\"_blank\" rel=\"noopener noreferrer\">" . esc_html( $rss_item['link'] ) . "</a></p>";
         }
+        $final_content = wp_kses_post( $processed_content . $source_link_html );
 
-
-        // Initial post data
         $new_post_data = array(
-            'post_title'   => $post_title, // Use the processed title
-            'post_content' => wp_kses_post( $processed_content ), // Sanitize content (though most tags are gone)
-            'post_status'  => 'publish', // You can change this to 'draft' for review
+            'post_title'   => $post_title,
+            'post_content' => $final_content,
+            'post_status'  => 'publish',
             'post_type'    => 'post',
-            'post_date'    => wp_date( 'Y-m-d H:i:s', $rss_item['date_timestamp'] ), // Use wp_date for site timezone
-            'post_date_gmt'=> gmdate( 'Y-m-d H:i:s', $rss_item['date_timestamp'] ), // Use gmdate for UTC
+            'post_date'    => wp_date( 'Y-m-d H:i:s', $rss_item['date_timestamp'] ),
+            'post_date_gmt'=> gmdate( 'Y-m-d H:i:s', $rss_item['date_timestamp'] ),
         );
 
-        // Insert the post to get an ID first
-        $post_id = wp_insert_post( $new_post_data, true ); // Pass true to return WP_Error on failure
+        $post_id = wp_insert_post( $new_post_data, true );
 
         if ( is_wp_error( $post_id ) ) {
-            $this->_log_message( sprintf( __( 'Failed to create WordPress post for RSS GUID %s: %s', 'sheapgamer-rss-fetcher' ), $rss_item['id'], $post_id->get_error_message() ), 'error' );
+            $this->_log_message( sprintf( __( 'Failed to create WordPress post for RSS GUID %s: %s', 'sheapgamer-rss-fetcher' ), esc_html($rss_item['id']), $post_id->get_error_message() ), 'error' );
             return false;
         }
 
-        // --- TAGS & SLUG LOGIC ---
-        // Extract English words from title for tags
-        preg_match_all('/\b[a-zA-Z]+\b/', $post_title, $matches);
-        $tags = array_map('strtolower', array_unique($matches[0])); // Convert to lowercase and ensure unique tags
+        // --- NEW: Gemini Integration for Tags & Slug ---
+        $gemini_api_key = get_option('sheapgamer_gemini_api_key');
+        $gemini_suggestions = false;
+        $tags_array = array();
+        $new_slug = '';
+        $plain_text_content = strip_tags($processed_content); // Use plain text for AI analysis
 
-        if (!empty($tags)) {
-            // Assign tags to the post
-            wp_set_post_tags( $post_id, $tags, false ); // 'false' to replace existing tags
-            $this->_log_message( sprintf( __( 'Added tags: %s to post ID %d.', 'sheapgamer-rss-fetcher' ), implode(', ', $tags), $post_id ), 'info' );
+        if ( !empty($gemini_api_key) ) {
+            $gemini_suggestions = $this->_get_gemini_suggestions($post_title, $plain_text_content, $gemini_api_key);
         }
 
-        // Create custom slug: /post_id-tag1-tag2
-        $slug_tags = !empty($tags) ? implode('-', $tags) : sanitize_title($post_title); // Fallback to sanitized title if no tags
-        $new_slug = $post_id . '-' . $slug_tags;
+        if ( $gemini_suggestions && !empty($gemini_suggestions['slug']) && !empty($gemini_suggestions['tags']) ) {
+            // --- Use Gemini Suggestions ---
+            $this->_log_message(sprintf(__('Successfully received suggestions from Gemini for post ID %d.', 'sheapgamer-rss-fetcher'), $post_id), 'info');
+            
+            $tags_array = array_map('trim', explode(',', $gemini_suggestions['tags']));
+            $new_slug = sanitize_title($gemini_suggestions['slug']);
+
+        } else {
+            // --- FALLBACK to original logic ---
+            if (!empty($gemini_api_key)) {
+                 $this->_log_message(sprintf(__('Could not get suggestions from Gemini for post ID %d. Using fallback logic.', 'sheapgamer-rss-fetcher'), $post_id), 'info');
+            } else {
+                 $this->_log_message(sprintf(__('Gemini API key not set. Using fallback logic for post ID %d.', 'sheapgamer-rss-fetcher'), $post_id), 'info');
+            }
+           
+            preg_match_all('/\b[a-zA-Z]+\b/', $post_title, $matches);
+            $tags_array = array_map('strtolower', array_unique($matches[0]));
+            $slug_tags = !empty($tags_array) ? implode('-', $tags_array) : sanitize_title($post_title);
+            $new_slug = $post_id . '-' . $slug_tags;
+        }
         
-        // Ensure slug is URL-friendly and unique
-        $new_slug = sanitize_title($new_slug);
+        // --- Apply Tags and Slug ---
+        if (!empty($tags_array)) {
+            wp_set_post_tags( $post_id, $tags_array, false );
+            $this->_log_message( sprintf( __( 'Added tags: %s to post ID %d.', 'sheapgamer-rss-fetcher' ), esc_html(implode(', ', $tags_array)), $post_id ), 'info' );
+        }
         
-        // Update the post with the custom slug
+        $final_slug = wp_unique_post_slug( $new_slug, $post_id, 'publish', 'post', 0 );
         wp_update_post( array(
             'ID'        => $post_id,
-            'post_name' => $new_slug,
+            'post_name' => $final_slug,
         ));
-        $this->_log_message( sprintf( __( 'Updated post ID %d with custom slug: %s.', 'sheapgamer-rss-fetcher' ), $post_id, $new_slug ), 'info' );
-        // --- END TAGS & SLUG LOGIC ---
+        $this->_log_message( sprintf( __( 'Updated post ID %d with slug: %s.', 'sheapgamer-rss-fetcher' ), $post_id, esc_html($final_slug) ), 'info' );
 
-
-        // Store RSS GUID as meta to prevent duplicates
         update_post_meta( $post_id, '_sheapgamer_rss_guid', $rss_item['id'] );
-        
-        // Store original RSS link as meta
         if ( ! empty( $rss_item['link'] ) ) {
             update_post_meta( $post_id, '_sheapgamer_rss_original_link', esc_url_raw( $rss_item['link'] ) );
         }
 
-        $this->_log_message( sprintf( __( 'Created WordPress post "%s" (ID: %d) from RSS GUID %s.', 'sheapgamer-rss-fetcher' ), $post_title, $post_id, $rss_item['id'] ), 'success' );
+        $post_link = get_edit_post_link($post_id, 'raw');
+        $success_message = sprintf( 
+            __( 'Created WordPress post "<a href="%s" target="_blank">%s</a>" (ID: %d) from RSS GUID %s.', 'sheapgamer-rss-fetcher' ), 
+            esc_url($post_link),
+            esc_html($post_title), 
+            $post_id, 
+            esc_html($rss_item['id']) 
+        );
+        $this->_log_message($success_message, 'success');
 
-        // Handle featured image
         if ( ! empty( $rss_item['image_url'] ) ) {
             $this->_set_featured_image_from_url( $rss_item['image_url'], $post_id, $post_title );
         }
@@ -580,18 +615,16 @@ class SheapGamer_RSS_Fetcher {
 
     /**
      * Checks if a WordPress post with the given RSS GUID already exists.
-     *
-     * @param string $rss_guid The RSS item GUID.
-     * @return int|bool The ID of the existing WordPress post, or false if not found.
      */
     private function _get_existing_post_by_rss_guid( $rss_guid ) {
         $args = array(
-            'post_type'  => 'post',
-            'meta_key'   => '_sheapgamer_rss_guid',
-            'meta_value' => $rss_guid,
-            'fields'     => 'ids',
+            'post_type'      => 'post',
+            'meta_key'       => '_sheapgamer_rss_guid',
+            'meta_value'     => $rss_guid,
+            'fields'         => 'ids',
             'posts_per_page' => 1,
-            'no_found_rows'  => true, // Optimize query
+            'post_status'    => 'any', // Check against all statuses
+            'no_found_rows'  => true,
         );
         $posts = get_posts( $args );
         return ! empty( $posts ) ? $posts[0] : false;
@@ -630,11 +663,11 @@ class SheapGamer_RSS_Fetcher {
         }
 
         if ( $created_count > 0 ) {
-            $message = sprintf( __( 'Fetched posts successfully. %d new WordPress posts created.', 'sheapgamer-rss-fetcher' ), $created_count );
+            $message = sprintf( __( 'Fetch complete. %d new WordPress posts created.', 'sheapgamer-rss-fetcher' ), $created_count );
             $this->_log_message( $message, 'success' );
             wp_send_json_success( array( 'message' => $message ) );
         } else {
-            $message = __( 'Fetched posts successfully, but no new WordPress posts were created (they might already exist or had issues).', 'sheapgamer-rss-fetcher' );
+            $message = __( 'Fetch complete. No new posts were created (they may already exist or there were issues during creation).', 'sheapgamer-rss-fetcher' );
             $this->_log_message( $message, 'info' );
             wp_send_json_success( array( 'message' => $message ) );
         }
@@ -669,7 +702,6 @@ new SheapGamer_RSS_Fetcher();
 // --- Activation / Deactivation Hooks ---
 /**
  * Function to run on plugin activation.
- * Creates the custom database table for logs.
  */
 function sheapgamer_rss_fetcher_activate() {
     global $wpdb;
@@ -684,22 +716,19 @@ function sheapgamer_rss_fetcher_activate() {
         PRIMARY KEY  (id)
     ) $charset_collate;";
 
-    require_once( ABSPATH . 'wp-admin/includes/upgrade.php' ); // This ensures dbDelta is available
+    require_once( ABSPATH . 'wp-admin/includes/upgrade.php' );
     dbDelta( $sql );
 }
 register_activation_hook( __FILE__, 'sheapgamer_rss_fetcher_activate' );
 
 /**
  * Function to run on plugin deactivation.
- * Cleans up plugin options.
  */
 function sheapgamer_rss_fetcher_deactivate() {
     delete_option( 'sheapgamer_rss_feed_url' );
     delete_option( 'sheapgamer_rss_post_limit' );
-
-    // Optionally, delete logs or drop the table on deactivation
-    // global $wpdb;
-    // $table_name = $wpdb->prefix . 'sheapgamer_rss_fetcher_logs';
-    // $wpdb->query( "DROP TABLE IF EXISTS $table_name" );
+    // Also delete the new API key option on deactivation
+    delete_option( 'sheapgamer_gemini_api_key' );
 }
 register_deactivation_hook( __FILE__, 'sheapgamer_rss_fetcher_deactivate' );
+
