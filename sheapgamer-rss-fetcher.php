@@ -55,7 +55,6 @@ class SheapGamer_RSS_Fetcher {
     public function register_settings() {
         register_setting( 'sheapgamer_rss_fetcher_group', 'sheapgamer_rss_feed_url', array( 'sanitize_callback' => 'esc_url_raw' ) );
         register_setting( 'sheapgamer_rss_fetcher_group', 'sheapgamer_rss_post_limit', array( 'sanitize_callback' => 'absint', 'default' => 5 ) );
-        // NEW: Register Gemini API Key setting
         register_setting( 'sheapgamer_rss_fetcher_group', 'sheapgamer_gemini_api_key', array( 'sanitize_callback' => 'sanitize_text_field' ) );
 
 
@@ -82,7 +81,6 @@ class SheapGamer_RSS_Fetcher {
             'sheapgamer_rss_fetcher_section'
         );
         
-        // NEW: Add settings field for Gemini API Key
         add_settings_field(
             'gemini_api_key_field',
             __( 'Gemini API Key', 'sheapgamer-rss-fetcher' ),
@@ -111,7 +109,6 @@ class SheapGamer_RSS_Fetcher {
         echo '<p class="description">' . esc_html__( 'Maximum number of latest posts to fetch from the RSS feed.', 'sheapgamer-rss-fetcher' ) . '</p>';
     }
 
-    // NEW: Callback for Gemini API Key field
     public function gemini_api_key_field_callback() {
         $api_key = get_option( 'sheapgamer_gemini_api_key', '' );
         echo '<input type="password" name="sheapgamer_gemini_api_key" value="' . esc_attr( $api_key ) . '" class="regular-text" placeholder="Enter your Gemini API Key" />';
@@ -411,7 +408,7 @@ class SheapGamer_RSS_Fetcher {
     }
     
     /**
-     * NEW: Gets title suggestion from the Gemini API.
+     * Gets title suggestion from the Gemini API.
      *
      * @param string $original_title The problematic original title.
      * @param string $content_snippet A short snippet of the post content for context.
@@ -421,7 +418,6 @@ class SheapGamer_RSS_Fetcher {
     private function _get_gemini_title_suggestion( $original_title, $content_snippet, $api_key ) {
         $this->_log_message( 'Attempting to get title suggestion from Gemini API.', 'info' );
 
-        // Changed model to gemini-2.0-flash
         $api_url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' . $api_key;
         
         // Truncate content snippet for prompt if too long
@@ -480,6 +476,73 @@ class SheapGamer_RSS_Fetcher {
     }
 
     /**
+     * NEW: Gets excerpt suggestion from the Gemini API.
+     *
+     * @param string $post_content The full content of the post.
+     * @param string $api_key The Gemini API key.
+     * @return string|false A suggested new excerpt on success, false on failure.
+     */
+    private function _get_gemini_excerpt_suggestion( $post_content, $api_key ) {
+        $this->_log_message( 'Attempting to get excerpt suggestion from Gemini API.', 'info' );
+
+        $api_url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' . $api_key;
+        
+        // Truncate content for prompt if too long, as excerpts are short summaries
+        $content_for_prompt = wp_trim_words(strip_tags($post_content), 300, '...'); // Use a larger snippet for excerpt generation
+
+        $prompt = "Summarize the following WordPress post content into a concise, engaging, and SEO-friendly Thai excerpt (maximum 55 words). Do not include any HTML tags or markdown. Provide only the Thai excerpt, nothing else.\n\n"
+                . "Post Content: \"{$content_for_prompt}\"\n\n"
+                . "Excerpt:";
+
+        $body = array(
+            'contents' => array(
+                array(
+                    'parts' => array(
+                        array('text' => $prompt)
+                    )
+                )
+            )
+        );
+
+        $args = array(
+            'body'    => json_encode($body),
+            'headers' => array('Content-Type' => 'application/json'),
+            'timeout' => 60, // Increase timeout for AI API calls
+        );
+
+        $response = wp_remote_post( $api_url, $args );
+
+        if ( is_wp_error( $response ) ) {
+            $this->_log_message( 'Gemini API request for excerpt failed: ' . $response->get_error_message(), 'error' );
+            return false;
+        }
+
+        $response_code = wp_remote_retrieve_response_code( $response );
+        $response_body = wp_remote_retrieve_body( $response );
+
+        if ( $response_code !== 200 ) {
+            $this->_log_message( "Gemini API for excerpt returned non-200 status: {$response_code}. Body: " . esc_html($response_body), 'error' );
+            return false;
+        }
+        
+        $data = json_decode($response_body, true);
+        
+        $suggested_excerpt_raw = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
+        
+        if ( empty($suggested_excerpt_raw) ) {
+            $this->_log_message( 'Gemini API response for excerpt was empty or in an unexpected format.', 'error' );
+            return false;
+        }
+        
+        // Clean up the suggested excerpt (remove quotes if Gemini adds them, trim whitespace, limit words)
+        $suggested_excerpt = trim( $suggested_excerpt_raw, '" ' );
+        $suggested_excerpt = wp_trim_words( $suggested_excerpt, 55, '' ); // Ensure it's not too long
+
+        return sanitize_text_field($suggested_excerpt);
+    }
+
+
+    /**
      * Gets slug and tag suggestions from the Gemini API.
      *
      * @param string $title The post title.
@@ -490,7 +553,6 @@ class SheapGamer_RSS_Fetcher {
     private function _get_gemini_suggestions( $title, $content, $api_key ) {
         $this->_log_message( 'Attempting to fetch slug and tag suggestions from Gemini API.', 'info' );
 
-        // Changed model to gemini-2.0-flash
         $api_url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' . $api_key;
 
         // Create a precise prompt asking for a JSON response
@@ -544,6 +606,7 @@ class SheapGamer_RSS_Fetcher {
             return false;
         }
         
+        // Remove markdown code block fences if Gemini adds them
         $json_string = trim( str_replace( array('```json', '```'), '', $text_content ) );
         $suggestions = json_decode( $json_string, true );
 
@@ -557,7 +620,7 @@ class SheapGamer_RSS_Fetcher {
 
     /**
      * Creates a new WordPress post from RSS data.
-     * MODIFIED to include Gemini AI integration for Title, Tags & Slug.
+     * MODIFIED to include Gemini AI integration for Title, Excerpt, Tags & Slug.
      *
      * @param array $rss_item The RSS item data.
      * @return int|bool The ID of the new WordPress post on success, false on failure.
@@ -588,11 +651,10 @@ class SheapGamer_RSS_Fetcher {
         $processed_content = trim($processed_content);
         $plain_text_content = strip_tags($processed_content); // Use plain text for AI analysis
 
-        // --- NEW: Conditional Gemini Title Suggestion ---
         $gemini_api_key = get_option('sheapgamer_gemini_api_key');
         $original_post_title_for_log = $post_title; // Store for logging purposes
 
-        // Check if the title is "weird" (e.g., contains common URL patterns or is very short/generic)
+        // --- Conditional Gemini Title Suggestion ---
         $is_weird_title = preg_match('/https?:\/\/(www\.)?|www\./i', $post_title) || 
                           strlen($post_title) < 10 || 
                           str_contains(strtolower($post_title), 'untitled') ||
@@ -624,6 +686,27 @@ class SheapGamer_RSS_Fetcher {
         }
         // --- END: Conditional Gemini Title Suggestion ---
 
+        // --- NEW: Gemini Excerpt Suggestion ---
+        $post_excerpt = '';
+        if ( !empty($gemini_api_key) && !empty($plain_text_content) ) {
+            $suggested_excerpt = $this->_get_gemini_excerpt_suggestion( $plain_text_content, $gemini_api_key );
+            if ( $suggested_excerpt ) {
+                $post_excerpt = $suggested_excerpt;
+                $this->_log_message(sprintf(__('Generated post excerpt using Gemini AI for post: "%s".', 'sheapgamer-rss-fetcher'), esc_html($post_title)), 'info');
+            } else {
+                $this->_log_message(sprintf(__('Could not generate post excerpt using Gemini AI for post: "%s".', 'sheapgamer-rss-fetcher'), esc_html($post_title)), 'warning');
+            }
+        } else if ( empty($gemini_api_key) ) {
+             $this->_log_message(sprintf(__('Gemini API key not set. Skipping excerpt generation for post: "%s".', 'sheapgamer-rss-fetcher'), esc_html($post_title)), 'info');
+        }
+
+        // Fallback to auto-generated excerpt by WordPress if AI fails or not used
+        if ( empty( $post_excerpt ) && !empty( $plain_text_content ) ) {
+            // Use wp_trim_words to create a default excerpt if AI fails
+            $post_excerpt = wp_trim_words( $plain_text_content, 55, '...' );
+        }
+        // --- END: Gemini Excerpt Suggestion ---
+
 
         $source_link_html = '';
         if ( ! empty( $rss_item['link'] ) ) {
@@ -634,6 +717,7 @@ class SheapGamer_RSS_Fetcher {
         $new_post_data = array(
             'post_title'   => $post_title, // Use potentially AI-enhanced title
             'post_content' => $final_content,
+            'post_excerpt' => $post_excerpt, // NEW: Add the generated excerpt
             'post_status'  => 'publish',
             'post_type'    => 'post',
             'post_date'    => wp_date( 'Y-m-d H:i:s', $rss_item['date_timestamp'] ),
@@ -828,7 +912,6 @@ register_activation_hook( __FILE__, 'sheapgamer_rss_fetcher_activate' );
 function sheapgamer_rss_fetcher_deactivate() {
     delete_option( 'sheapgamer_rss_feed_url' );
     delete_option( 'sheapgamer_rss_post_limit' );
-    // Also delete the new API key option on deactivation
     delete_option( 'sheapgamer_gemini_api_key' );
 }
 register_deactivation_hook( __FILE__, 'sheapgamer_rss_fetcher_deactivate' );

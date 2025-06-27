@@ -21,6 +21,8 @@ Say goodbye to manual content import and inconsistent post metadata, and welcome
 
   * **Intelligent Title Correction:** Automatically detects and suggests new, meaningful titles using Gemini AI for posts that have problematic or URL-based titles (e.g., titles containing "https://www").
 
+  * **Exceprt Generation:** Utilizes Google's Gemini AI to generate SEO friendly Thai Exceprt
+
   * **Featured Image Support:** Attempts to extract and set featured images from RSS feed items.
 
   * **Activity Logging:** Comprehensive logging of fetch operations, post creation, and any errors directly within your WordPress admin.
