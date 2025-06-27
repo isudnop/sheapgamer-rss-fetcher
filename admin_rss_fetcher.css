@@ -1,0 +1,90 @@
+/* admin_rss_fetcher.css */
+
+/* Renamed classes to be more generic/reused, or prefixed with rss-fetcher */
+.sheapgamer-rss-fetcher-tools { /* Changed from fb-fetcher-tools */
+    margin-top: 20px;
+    margin-bottom: 20px;
+    display: flex; /* For alignment of buttons and message */
+    align-items: center;
+    gap: 10px; /* Space between items */
+}
+
+#sheapgamer-rss-fetch-result { /* Changed from fb-fetch-result */
+    margin-left: 10px;
+    padding: 8px 12px;
+    border-radius: 5px;
+    font-weight: bold;
+    display: none; /* Hidden by default */
+}
+
+#sheapgamer-rss-fetch-result.success { /* Changed from fb-fetch-result */
+    background-color: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+    display: block; /* Show on success */
+}
+
+#sheapgamer-rss-fetch-result.error { /* Changed from fb-fetch-result */
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+    display: block; /* Show on error */
+}
+
+/* NEW: Loading spinner styles */
+#sheapgamer-rss-fetch-result.loading {
+    background-color: #e6f7ff;
+    color: #005680;
+    border: 1px solid #b3e0ff;
+    display: flex; /* Use flex to align spinner and text */
+    align-items: center;
+}
+
+#sheapgamer-rss-fetch-result.loading .spinner {
+    float: none; /* Override default spinner float */
+    margin: 0 5px 0 0; /* Adjust margin for inline display */
+    vertical-align: middle;
+}
+
+
+.sheapgamer-rss-fetcher-log-display { /* Changed from fb-fetcher-log-display */
+    background: #fff;
+    border: 1px solid #e5e5e5;
+    padding: 15px;
+    margin-top: 15px;
+    border-radius: 8px;
+    box-shadow: 0 1px 1px rgba(0,0,0,.04);
+    max-height: 400px; /* Limit height for scrollability */
+    overflow-y: auto; /* Enable vertical scrolling */
+}
+
+.sheapgamer-rss-fetcher-log-display table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.sheapgamer-rss-fetcher-log-display th,
+.sheapgamer-rss-fetcher-log-display td {
+    padding: 8px;
+    border: 1px solid #e5e5e5;
+    text-align: left;
+    vertical-align: top;
+}
+
+.sheapgamer-rss-fetcher-log-display th {
+    background-color: #f0f0f0;
+}
+
+.sheapgamer-rss-fetcher-log-display td.log-type-error {
+    color: #dc3232;
+    font-weight: bold;
+}
+.sheapgamer-rss-fetcher-log-display td.log-type-warning {
+    color: #ffb900;
+}
+.sheapgamer-rss-fetcher-log-display td.log-type-success {
+    color: #46b450;
+}
+.sheapgamer-rss-fetcher-log-display td.log-type-info {
+    color: #0073aa;
+}
