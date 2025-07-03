@@ -639,20 +639,28 @@ class SheapGamer_RSS_Fetcher {
             return false;
         }
 
-        $raw_title = ! empty( $rss_item['title'] ) ? $rss_item['title'] : '';
-        $temp_title_parts = explode('.', $raw_title, 2);
-        $post_title = trim($temp_title_parts[0]);
-
-        // Clean content for AI analysis and final post
         $raw_post_content = ! empty( $rss_item['content'] ) ? $rss_item['content'] : '';
         $processed_content = str_replace( array('<br>', '<br/>', '<br />'), "\n", $raw_post_content );
-        $processed_content = strip_tags( $processed_content, '<a><p><h1><h2><h3><h4><h5><h6>' ); // Keep basic formatting tags
-        $processed_content = preg_replace("/\n{3,}/", "\n\n", $processed_content);
-        $processed_content = trim($processed_content);
-        $plain_text_content = strip_tags($processed_content); // Use plain text for AI analysis
+        
+        // Find the first <br> or \n to determine the title and the rest of the content
+        $content_lines = explode("\n", $processed_content, 2);
+        
+        // 1. Post Title Creation: Pull from content until first <br> tag
+        $post_title = trim(strip_tags($content_lines[0] ?? ''));
+        if (empty($post_title)) {
+            // Fallback if the first line is empty after stripping tags
+            $post_title = ! empty( $rss_item['title'] ) ? $rss_item['title'] : '';
+        }
+        $original_post_title_for_log = $post_title; // Store for logging purposes
+
+
+        // 2. Post Content: Remove content until hit first <br> tag
+        $final_content_raw = $content_lines[1] ?? ''; // The rest of the content after the first <br>
+        $final_content_raw = strip_tags( $final_content_raw, '<a><p><h1><h2><h3><h4><h5><h6>' ); // Keep basic formatting tags
+        $final_content_raw = preg_replace("/\n{3,}/", "\n\n", $final_content_raw);
+        $plain_text_content = strip_tags($final_content_raw); // Use plain text for AI analysis
 
         $gemini_api_key = get_option('sheapgamer_gemini_api_key');
-        $original_post_title_for_log = $post_title; // Store for logging purposes
 
         // --- Conditional Gemini Title Suggestion ---
         $is_weird_title = preg_match('/https?:\/\/(www\.)?|www\./i', $post_title) || 
@@ -712,7 +720,7 @@ class SheapGamer_RSS_Fetcher {
         if ( ! empty( $rss_item['link'] ) ) {
             $source_link_html = "\n\n<p>Source: <a href=\"" . esc_url( $rss_item['link'] ) . "\" target=\"_blank\" rel=\"noopener noreferrer\">" . esc_html( $rss_item['link'] ) . "</a></p>";
         }
-        $final_content = wp_kses_post( $processed_content . $source_link_html );
+        $final_content = wp_kses_post( $final_content_raw . $source_link_html ); // Use $final_content_raw here
 
         $new_post_data = array(
             'post_title'   => $post_title, // Use potentially AI-enhanced title
