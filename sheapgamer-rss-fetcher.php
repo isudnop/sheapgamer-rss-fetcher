@@ -490,7 +490,10 @@ class SheapGamer_RSS_Fetcher {
         // Truncate content for prompt if too long, as excerpts are short summaries
         $content_for_prompt = wp_trim_words(strip_tags($post_content), 300, '...'); // Use a larger snippet for excerpt generation
 
-        $prompt = "Summarize the following WordPress post content into a concise, engaging, and SEO-friendly Thai excerpt (maximum 55 words). Do not include any HTML tags or markdown. Provide only the Thai excerpt, nothing else.\n\n"
+        $prompt = "Summarize the following WordPress post content into a concise, engaging, 
+                    and SEO-friendly Thai excerpt (maximum 50 words). 
+                    Do not include any HTML tags or markdown. 
+                    Provide only the Thai excerpt, nothing else.\n\n"
                 . "Post Content: \"{$content_for_prompt}\"\n\n"
                 . "Excerpt:";
 
@@ -552,7 +555,7 @@ class SheapGamer_RSS_Fetcher {
 
         // Create a precise prompt asking for a JSON response
         $prompt = "Analyze the following WordPress post title and content. Your task is to provide two things:\n"
-                . "1. A concise, SEO-friendly, URL-safe slug (all lowercase, words separated by hyphens).\n"
+                . "1. A concise, SEO-friendly, URL-safe slug (all english lowercase, words separated by hyphens).\n"
                 . "2. A comma-separated list of 5-7 highly relevant tags.\n\n"
                 . "IMPORTANT: Your entire response must be ONLY a valid JSON object. Do not include any text before or after the JSON. The JSON object must have two keys: 'slug' and 'tags'.\n\n"
                 . "Example Response Format:\n"
