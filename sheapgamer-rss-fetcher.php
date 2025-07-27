@@ -25,6 +25,7 @@ class SheapGamer_RSS_Fetcher {
         'deals' => 19,
         'article' => 1641,
         'demo' => 1670,
+        'mods' => 1347,
     ];
 
     const GEMINI_VERSION = 'gemini-2.5-flash'; // Update to the latest Gemini model version as needed
@@ -671,6 +672,11 @@ class SheapGamer_RSS_Fetcher {
             $category_name = 'demo';
             $post_title = trim(str_replace('[Demo]', '', $post_title));
             $category_log_message = __( 'Detected "[Demo]", assigned "demo" category.', 'sheapgamer-rss-fetcher' );
+        } elseif ( str_contains($post_title, '[Mods]') ) {
+            $post_category_id = self::ID_CATEGORIES['mods'];
+            $category_name = 'mods';
+            $post_title = trim(str_replace('[Mods]', '', $post_title));
+            $category_log_message = __( 'Detected "[Mods]", assigned "mods" category.', 'sheapgamer-rss-fetcher' );
         }
         // --- END: Category Assignment Logic ---
 
