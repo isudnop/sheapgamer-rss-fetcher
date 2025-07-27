@@ -2,8 +2,8 @@
 /**
  * Plugin Name: SheapGamer RSS Content Fetcher
  * Plugin URI: https://sheapgamer.com/
- * Description: Fetches posts from a specified RSS Feed URL and creates WordPress posts. Now with Gemini AI for automatic slug/tag generation and category assignment.
- * Version: 1.4.0
+ * Description: Fetches posts from a specified RSS Feed URL and creates WordPress posts. Now with Gemini AI for automatic slug/tag generation and category assignment. Includes hourly cron job.
+ * Version: 1.5.0
  * Author: Nop SheapGamer
  * Author URI: https://sheapgamer.com/
  * License: GPL2
@@ -34,14 +34,18 @@ class SheapGamer_RSS_Fetcher {
      * Constructor.
      */
     public function __construct() {
+        // Admin UI hooks
         add_action( 'admin_menu', array( $this, 'add_admin_menu' ) );
         add_action( 'admin_init', array( $this, 'register_settings' ) );
         add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_scripts' ) );
 
-        // AJAX handler for fetching posts
+        // AJAX handlers for the admin page buttons
         add_action( 'wp_ajax_sheapgamer_rss_fetch_posts', array( $this, 'ajax_fetch_posts' ) );
         add_action( 'wp_ajax_sheapgamer_rss_fetcher_clear_logs', array( $this, 'ajax_clear_logs' ) );
         add_action( 'wp_ajax_sheapgamer_rss_fetcher_get_logs', array( $this, 'ajax_get_logs' ) );
+        
+        // **NEW**: Hook for the WP-Cron job
+        add_action( 'sheapgamer_rss_fetcher_cron_hook', array( $this, 'run_fetch_process' ) );
     }
 
     /**
@@ -105,6 +109,16 @@ class SheapGamer_RSS_Fetcher {
      */
     public function settings_section_callback() {
         echo '<p><strong>' . esc_html__( 'Note:', 'sheapgamer-rss-fetcher' ) . '</strong> ' . esc_html__( 'If not not sure please ask Nop about RSS URL', 'sheapgamer-rss-fetcher' ) . '</p>';
+        
+        // **NEW**: Display cron job status
+        if ( wp_next_scheduled( 'sheapgamer_rss_fetcher_cron_hook' ) ) {
+            echo '<p style="color: green;">' . sprintf(
+                esc_html__( 'An automatic hourly fetch is scheduled. Next run: %s', 'sheapgamer-rss-fetcher' ),
+                get_date_from_gmt( date( 'Y-m-d H:i:s', wp_next_scheduled( 'sheapgamer_rss_fetcher_cron_hook' ) ), 'Y-m-d H:i:s' )
+            ) . '</p>';
+        } else {
+            echo '<p style="color: red;">' . esc_html__( 'The automatic hourly fetch is NOT scheduled. Please re-activate the plugin.', 'sheapgamer-rss-fetcher' ) . '</p>';
+        }
     }
 
     public function rss_feed_url_field_callback() {
@@ -177,7 +191,7 @@ class SheapGamer_RSS_Fetcher {
             'sheapgamer-rss-fetcher-admin-script',
             plugin_dir_url( __FILE__ ) . 'admin_rss_fetcher.js',
             array( 'jquery' ),
-            '1.4.0', // Incremented version
+            '1.5.0', // Incremented version
             true
         );
 
@@ -251,6 +265,7 @@ class SheapGamer_RSS_Fetcher {
         global $wpdb;
         $table_name = $wpdb->prefix . 'sheapgamer_rss_fetcher_logs';
 
+        // If the table doesn't exist, log to PHP error log as a fallback.
         if ( $wpdb->get_var( "SHOW TABLES LIKE '$table_name'" ) != $table_name ) {
             error_log( '[SheapGamer RSS Fetcher] Log table does not exist. Cannot log message: ' . $message );
             return;
@@ -619,10 +634,6 @@ class SheapGamer_RSS_Fetcher {
 
     /**
      * Creates a new WordPress post from RSS data.
-     * MODIFIED to include Gemini AI integration and automatic category assignment.
-     *
-     * @param array $rss_item The RSS item data.
-     * @return int|bool The ID of the new WordPress post on success, false on failure.
      */
     private function _create_wordpress_post( $rss_item ) {
         // Check for existing post by GUID first to prevent duplicates
@@ -853,29 +864,31 @@ class SheapGamer_RSS_Fetcher {
         return ! empty( $posts ) ? $posts[0] : false;
     }
 
-
     /**
-     * AJAX handler to fetch posts from RSS.
+     * **REFACTORED**: Core logic for fetching and creating posts.
+     * This is now called by both the AJAX handler and the WP-Cron job.
+     *
+     * @return array An array containing a status message and the number of created posts.
      */
-    public function ajax_fetch_posts() {
-        check_ajax_referer( 'sheapgamer_rss_fetch_posts_nonce', 'nonce' );
-
-        if ( ! current_user_can( 'edit_published_posts' ) ) {
-            wp_send_json_error( array( 'message' => __( 'You do not have permission to fetch posts.', 'sheapgamer-rss-fetcher' ) ) );
-        }
+    public function run_fetch_process() {
+        $this->_log_message( __( 'Starting RSS fetch process...', 'sheapgamer-rss-fetcher' ), 'info' );
 
         $feed_url = get_option( 'sheapgamer_rss_feed_url', '' );
         $limit = get_option( 'sheapgamer_rss_post_limit', 5 );
 
         if ( empty( $feed_url ) || ! filter_var( $feed_url, FILTER_VALIDATE_URL ) ) {
-            $this->_log_message( __( 'RSS Feed URL is missing or invalid in settings. Please configure.', 'sheapgamer-rss-fetcher' ), 'error' );
-            wp_send_json_error( array( 'message' => __( 'Configuration missing or invalid. Check settings.', 'sheapgamer-rss-fetcher' ) ) );
+            $message = __( 'RSS Feed URL is missing or invalid in settings. Process aborted.', 'sheapgamer-rss-fetcher' );
+            $this->_log_message( $message, 'error' );
+            return array( 'message' => $message, 'created_count' => 0, 'status' => 'error' );
         }
 
         $rss_items = $this->_fetch_rss_posts( $feed_url, $limit );
 
         if ( ! $rss_items ) {
-            wp_send_json_error( array( 'message' => __( 'No items fetched from RSS feed or an error occurred during fetching. Check logs for details.', 'sheapgamer-rss-fetcher' ) ) );
+            $message = __( 'No items fetched from RSS feed or an error occurred during fetching. Check logs for details.', 'sheapgamer-rss-fetcher' );
+            // The _fetch_rss_posts method already logs the specific error, so we just log a generic info message here.
+            $this->_log_message( $message, 'info' );
+            return array( 'message' => $message, 'created_count' => 0, 'status' => 'error' );
         }
 
         $created_count = 0;
@@ -888,11 +901,31 @@ class SheapGamer_RSS_Fetcher {
         if ( $created_count > 0 ) {
             $message = sprintf( __( 'Fetch complete. %d new WordPress posts created.', 'sheapgamer-rss-fetcher' ), $created_count );
             $this->_log_message( $message, 'success' );
-            wp_send_json_success( array( 'message' => $message ) );
+            return array( 'message' => $message, 'created_count' => $created_count, 'status' => 'success' );
         } else {
             $message = __( 'Fetch complete. No new posts were created (they may already exist or there were issues during creation).', 'sheapgamer-rss-fetcher' );
             $this->_log_message( $message, 'info' );
-            wp_send_json_success( array( 'message' => $message ) );
+            return array( 'message' => $message, 'created_count' => 0, 'status' => 'success' );
+        }
+    }
+
+
+    /**
+     * **REFACTORED**: AJAX handler to fetch posts from RSS. Now a wrapper for run_fetch_process.
+     */
+    public function ajax_fetch_posts() {
+        check_ajax_referer( 'sheapgamer_rss_fetch_posts_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'edit_published_posts' ) ) {
+            wp_send_json_error( array( 'message' => __( 'You do not have permission to fetch posts.', 'sheapgamer-rss-fetcher' ) ) );
+        }
+
+        $result = $this->run_fetch_process();
+
+        if ( $result['status'] === 'error' ) {
+            wp_send_json_error( array( 'message' => $result['message'] ) );
+        } else {
+            wp_send_json_success( array( 'message' => $result['message'] ) );
         }
     }
 
@@ -925,8 +958,10 @@ new SheapGamer_RSS_Fetcher();
 // --- Activation / Deactivation Hooks ---
 /**
  * Function to run on plugin activation.
+ * Creates the log table and schedules the cron job.
  */
 function sheapgamer_rss_fetcher_activate() {
+    // Create the custom log table
     global $wpdb;
     $table_name = $wpdb->prefix . 'sheapgamer_rss_fetcher_logs';
     $charset_collate = $wpdb->get_charset_collate();
@@ -941,13 +976,23 @@ function sheapgamer_rss_fetcher_activate() {
 
     require_once( ABSPATH . 'wp-admin/includes/upgrade.php' );
     dbDelta( $sql );
+
+    // **NEW**: Schedule the cron job if it's not already scheduled.
+    if ( ! wp_next_scheduled( 'sheapgamer_rss_fetcher_cron_hook' ) ) {
+        // Schedule to run hourly. WP-Cron will handle the exact timing.
+        wp_schedule_event( time(), 'hourly', 'sheapgamer_rss_fetcher_cron_hook' );
+    }
 }
 register_activation_hook( __FILE__, 'sheapgamer_rss_fetcher_activate' );
 
 /**
  * Function to run on plugin deactivation.
+ * Clears the scheduled cron job.
  */
 function sheapgamer_rss_fetcher_deactivate() {
+    // **NEW**: Clear the scheduled cron job.
+    wp_clear_scheduled_hook( 'sheapgamer_rss_fetcher_cron_hook' );
+
     // Optional: Decide if you want to remove these on deactivation.
     // It's often better to leave them so settings are preserved on re-activation.
     // delete_option( 'sheapgamer_rss_feed_url' );
