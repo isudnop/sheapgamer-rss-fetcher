@@ -651,6 +651,9 @@ class SheapGamer_RSS_Fetcher {
 
         $raw_post_content = ! empty( $rss_item['content'] ) ? $rss_item['content'] : '';
         $processed_content = str_replace( array('<br>', '<br/>', '<br />'), "\n", $raw_post_content );
+
+        //auto add hyperlinks using make_clickable
+        $processed_content = make_clickable( $processed_content );
         
         $content_lines = explode("\n", $processed_content, 2);
         
@@ -765,6 +768,7 @@ class SheapGamer_RSS_Fetcher {
             'post_excerpt'  => $post_excerpt, // NEW: Add the generated excerpt
             'post_status'   => 'publish',
             'post_type'     => 'post',
+            'post_author'   => 5,
             'post_date'     => wp_date( 'Y-m-d H:i:s', $rss_item['date_timestamp'] ),
             'post_date_gmt' => gmdate( 'Y-m-d H:i:s', $rss_item['date_timestamp'] ),
             'post_category' => array( $post_category_id ), // NEW: Assign the detected category
