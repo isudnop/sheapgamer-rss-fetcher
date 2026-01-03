@@ -3,7 +3,7 @@
  * Plugin Name: SheapGamer RSS Content Fetcher
  * Plugin URI: https://sheapgamer.com/
  * Description: Fetches posts from a specified RSS Feed URL and creates WordPress posts. Now with Gemini AI for automatic slug/tag generation and category assignment. Includes hourly cron job.
- * Version: 1.5.0
+ * Version: 1.7.0
  * Author: Nop SheapGamer
  * Author URI: https://sheapgamer.com/
  * License: GPL2
