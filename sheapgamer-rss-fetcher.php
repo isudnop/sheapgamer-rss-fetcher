@@ -26,6 +26,7 @@ class SheapGamer_RSS_Fetcher {
         'article' => 1641,
         'demo' => 1670,
         'mods' => 1347,
+        'meme' => 10142,
     ];
 
     const GEMINI_VERSION = 'gemini-2.5-flash'; // Update to the latest Gemini model version as needed
@@ -667,11 +668,22 @@ class SheapGamer_RSS_Fetcher {
 
 
         // --- NEW: Category Assignment Logic ---
-        $post_category_id = self::ID_CATEGORIES['deals']; // Default to 'deals'
-        $category_name = 'deals';
-        $category_log_message = __( 'Defaulted to category "deals".', 'sheapgamer-rss-fetcher' );
+        $post_category_id = self::ID_CATEGORIES['meme']; // Default to 'meme'
+        $category_name = 'meme';
+        $category_log_message = __( 'Defaulted to category "meme".', 'sheapgamer-rss-fetcher' );
 
-        if ( str_contains($post_title, '[News]') ) {
+        // Check if title or content starts with "https" - categorize as Deal
+        if ( preg_match('/^https/i', $post_title) || preg_match('/^https/i', trim($raw_post_content)) ) {
+            $post_category_id = self::ID_CATEGORIES['deals'];
+            $category_name = 'deals';
+            $category_log_message = __( 'Detected URL at start, assigned "deals" category.', 'sheapgamer-rss-fetcher' );
+            
+            // If title starts with https, discard it and mark for Gemini generation
+            if ( preg_match('/^https/i', $post_title) ) {
+                $this->_log_message( sprintf( __( 'Title starts with URL: "%s". Discarding and will generate new title via Gemini.', 'sheapgamer-rss-fetcher' ), esc_html($post_title) ), 'info' );
+                $post_title = ''; // Discard the URL title
+            }
+        } elseif ( str_contains($post_title, '[News]') ) {
             $post_category_id = self::ID_CATEGORIES['news'];
             $category_name = 'news';
             $post_title = trim(str_replace('[News]', '', $post_title));
@@ -700,10 +712,22 @@ class SheapGamer_RSS_Fetcher {
         $final_content_raw = preg_replace("/\n{3,}/", "\n\n", $final_content_raw);
         $plain_text_content = strip_tags($final_content_raw); // Use plain text for AI analysis
 
+        // --- Additional Check: Detect "ลดราคา" (discount) keyword as final check ---
+        // This runs after category prefix detection and can change meme to deals
+        if ( ( str_contains($post_title, 'ลดราคา') || str_contains($plain_text_content, 'ลดราคา') ) ) {
+            if ( $category_name === 'meme' || $category_name === 'deals' ) {
+                $post_category_id = self::ID_CATEGORIES['deals'];
+                $category_name = 'deals';
+                $category_log_message = __( 'Detected "ลดราคา" keyword, assigned "deals" category.', 'sheapgamer-rss-fetcher' );
+            }
+        }
+
         $gemini_api_key = get_option('sheapgamer_gemini_api_key');
 
         // --- Conditional Gemini Title Suggestion ---
-        $is_weird_title = preg_match('/https?:\/\/(www\.)?|www\./i', $post_title) || 
+        // Check if title is empty (discarded URL) or problematic
+        $is_weird_title = empty($post_title) || 
+                          preg_match('/https?:\/\/(www\.)?|www\./i', $post_title) || 
                           strlen($post_title) < 10 || 
                           str_contains(strtolower($post_title), 'untitled') ||
                           str_contains(strtolower($post_title), 'default title'); // Add more patterns if needed

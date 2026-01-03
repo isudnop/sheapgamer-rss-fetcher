@@ -35,12 +35,17 @@ This is a WordPress plugin that fetches content from RSS feeds and automatically
 **Category System:**
 The plugin uses hardcoded category IDs defined in `ID_CATEGORIES` constant:
 - 'news' => 1
-- 'deals' => 19 (default)
+- 'deals' => 19
 - 'article' => 1641
 - 'demo' => 1670
 - 'mods' => 1347
+- 'meme' => 10142 (default)
 
-Category assignment is based on title prefixes: [News], [Article], [Demo], [Mods]
+Category assignment is based on:
+1. URL detection: If title or content starts with "https" → categorize as 'deals'
+2. Title prefixes: [News], [Article], [Demo], [Mods]
+3. Discount keyword: "ลดราคา" (Thai word for discount) in title or content → categorize as 'deals'
+4. Default: Posts without any of the above are categorized as 'meme'
 
 **Admin UI Components:**
 - `admin_rss_fetcher.js`: jQuery-based AJAX handlers
@@ -157,8 +162,19 @@ wp db query "TRUNCATE TABLE wp_sheapgamer_rss_fetcher_logs"
 **Title Extraction:**
 1. Extract text before first `<br>` tag from RSS content
 2. Strip HTML tags
-3. If title contains URLs or is too short, use Gemini AI for suggestion
-4. Remove category prefix markers ([News], [Article], etc.)
+3. **Special case:** If title starts with "https", discard that title completely
+4. If title is empty, contains URLs, or is too short, use Gemini AI for suggestion
+5. Remove category prefix markers ([News], [Article], etc.)
+
+**Category Detection (in priority order):**
+1. **URL Detection:** If title or content starts with "https" → assign 'deals' category
+2. **Prefix Detection:** Check for category prefix markers in title:
+   - [News] → 'news' category
+   - [Article] → 'article' category
+   - [Demo] → 'demo' category
+   - [Mods] → 'mods' category
+3. **Discount Keyword:** If "ลดราคา" keyword found in title or content → assign 'deals' category
+4. **Default:** If no above conditions met → assign 'meme' category
 
 **Content Processing:**
 1. Remove first line (used as title)
