@@ -3,7 +3,7 @@
  * Plugin Name: SheapGamer RSS Content Fetcher
  * Plugin URI: https://sheapgamer.com/
  * Description: Fetches posts from a specified RSS Feed URL and creates WordPress posts. Now with Gemini AI for automatic slug/tag generation and category assignment. Includes hourly cron job.
- * Version: 1.7.0
+ * Version: 1.8.0
  * Author: Nop SheapGamer
  * Author URI: https://sheapgamer.com/
  * License: GPL2
@@ -29,7 +29,9 @@ class SheapGamer_RSS_Fetcher {
         'meme' => 10142,
     ];
 
-    const GEMINI_VERSION = 'gemini-2.5-flash'; // Update to the latest Gemini model version as needed
+
+    const GEMINI_VERSION = 'gemini-3-flash-preview'; // Stable version 3
+    const GEMINI_FALLBACK_VERSION = 'gemini-2.5-flash'; // Update to the latest Gemini model version as needed
 
     /**
      * Constructor.
@@ -434,53 +436,109 @@ class SheapGamer_RSS_Fetcher {
     }
     
     /**
+     * Makes a Gemini API request with automatic fallback on rate limit.
+     * 
+     * @param string $prompt The prompt to send to Gemini
+     * @param string $api_key The API key
+     * @param string $purpose Description of what this request is for (for logging)
+     * @return array|false Response data array or false on failure
+     */
+    private function _call_gemini_api( $prompt, $api_key, $purpose = 'request' ) {
+        $model_version = self::GEMINI_VERSION;
+        $is_fallback = false;
+        
+        for ( $attempt = 1; $attempt <= 2; $attempt++ ) {
+            $api_url = 'https://generativelanguage.googleapis.com/v1beta/models/' . $model_version . ':generateContent?key=' . $api_key;
+            
+            if ( $attempt === 2 ) {
+                $this->_log_message( sprintf( 'Retrying %s with fallback model: %s', $purpose, self::GEMINI_FALLBACK_VERSION ), 'info' );
+            }
+            
+            $body = array(
+                'contents' => array(
+                    array(
+                        'parts' => array(
+                            array('text' => $prompt)
+                        )
+                    )
+                )
+            );
+            
+            $args = array(
+                'body'    => json_encode($body),
+                'headers' => array('Content-Type' => 'application/json'),
+                'timeout' => 60,
+            );
+            
+            $response = wp_remote_post( $api_url, $args );
+            
+            if ( is_wp_error( $response ) ) {
+                $this->_log_message( sprintf( 'Gemini API %s failed (attempt %d): %s', $purpose, $attempt, $response->get_error_message() ), 'error' );
+                if ( $attempt === 2 ) {
+                    return false;
+                }
+                continue;
+            }
+            
+            $response_code = wp_remote_retrieve_response_code( $response );
+            $response_body = wp_remote_retrieve_body( $response );
+            
+            // Check for rate limit error (429) or resource exhausted
+            if ( $response_code === 429 || ( $response_code !== 200 && strpos( $response_body, 'RESOURCE_EXHAUSTED' ) !== false ) ) {
+                $this->_log_message( sprintf( 'Gemini API %s hit rate limit (HTTP %d). %s', $purpose, $response_code, $attempt === 1 ? 'Will retry with fallback model.' : 'Fallback also rate limited.' ), 'warning' );
+                
+                if ( $attempt === 1 ) {
+                    // Switch to fallback model and retry
+                    $model_version = self::GEMINI_FALLBACK_VERSION;
+                    $is_fallback = true;
+                    continue;
+                } else {
+                    return false;
+                }
+            }
+            
+            if ( $response_code !== 200 ) {
+                $this->_log_message( sprintf( 'Gemini API %s returned non-200 status (attempt %d): %d. Body: %s', $purpose, $attempt, $response_code, esc_html($response_body) ), 'error' );
+                if ( $attempt === 2 ) {
+                    return false;
+                }
+                // Switch to fallback for any non-200 error
+                $model_version = self::GEMINI_FALLBACK_VERSION;
+                $is_fallback = true;
+                continue;
+            }
+            
+            $data = json_decode($response_body, true);
+            
+            if ( $is_fallback ) {
+                $this->_log_message( sprintf( 'Successfully used fallback model for %s', $purpose ), 'info' );
+            }
+            
+            return $data;
+        }
+        
+        return false;
+    }
+    
+    /**
      * Gets title suggestion from the Gemini API.
      */
     private function _get_gemini_title_suggestion( $original_title, $content_snippet, $api_key ) {
         $this->_log_message( 'Attempting to get title suggestion from Gemini API.', 'info' );
 
-        $api_url = 'https://generativelanguage.googleapis.com/v1beta/models/' . self::GEMINI_VERSION . ':generateContent?key=' . $api_key;
-
         // Truncate content snippet for prompt if too long
         $content_snippet = wp_trim_words(strip_tags($content_snippet), 100, '...');
 
-        $prompt = "Given the original problematic post title and a content snippet, suggest a new, concise, and descriptive English title for a WordPress post. The new title should be human-readable and SEO-friendly (max 15 words). Provide only the new title, nothing else.\n\n"
+        $prompt = "Given the original problematic post title and a content snippet, suggest a new, concise, and descriptive Thai title for a WordPress post. The new title should be human-readable and SEO-friendly (max 15 words). Provide only the new title, nothing else.\n\n"
                 . "Original Title: \"{$original_title}\"\n"
                 . "Content Snippet: \"{$content_snippet}\"\n\n"
                 . "New Title:";
 
-        $body = array(
-            'contents' => array(
-                array(
-                    'parts' => array(
-                        array('text' => $prompt)
-                    )
-                )
-            )
-        );
-
-        $args = array(
-            'body'    => json_encode($body),
-            'headers' => array('Content-Type' => 'application/json'),
-            'timeout' => 60, // Increase timeout for AI API calls
-        );
-
-        $response = wp_remote_post( $api_url, $args );
-
-        if ( is_wp_error( $response ) ) {
-            $this->_log_message( 'Gemini API request for title failed: ' . $response->get_error_message(), 'error' );
-            return false;
-        }
-
-        $response_code = wp_remote_retrieve_response_code( $response );
-        $response_body = wp_remote_retrieve_body( $response );
-
-        if ( $response_code !== 200 ) {
-            $this->_log_message( "Gemini API for title returned non-200 status: {$response_code}. Body: " . esc_html($response_body), 'error' );
-            return false;
-        }
+        $data = $this->_call_gemini_api( $prompt, $api_key, 'title suggestion' );
         
-        $data = json_decode($response_body, true);
+        if ( ! $data ) {
+            return false;
+        }
         
         $suggested_title_raw = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
         
