@@ -26,7 +26,7 @@ This is a WordPress plugin that fetches content from RSS feeds and automatically
 - `run_fetch_process()`: Core logic for RSS fetching and post creation (called by both AJAX and cron)
 - `_fetch_rss_posts()`: Fetches and parses RSS feed using WordPress SimplePie
 - `_create_wordpress_post()`: Creates WordPress post with AI enhancements
-- `_get_gemini_suggestions()`: Calls Gemini API for slug/tag generation
+- `_get_gemini_slug_and_tags_suggestions()`: Calls Gemini API for slug/tag generation
 - `_get_gemini_title_suggestion()`: Fixes problematic titles using AI
 - `_get_gemini_excerpt_suggestion()`: Generates Thai excerpt using AI
 - `_set_featured_image_from_url()`: Downloads and attaches featured images

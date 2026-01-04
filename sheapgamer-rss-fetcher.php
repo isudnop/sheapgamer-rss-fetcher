@@ -3,7 +3,7 @@
  * Plugin Name: SheapGamer RSS Content Fetcher
  * Plugin URI: https://sheapgamer.com/
  * Description: Fetches posts from a specified RSS Feed URL and creates WordPress posts. Now with Gemini AI for automatic slug/tag generation and category assignment. Includes hourly cron job.
- * Version: 1.8.0
+ * Version: 1.9.0
  * Author: Nop SheapGamer
  * Author URI: https://sheapgamer.com/
  * License: GPL2
@@ -519,6 +519,57 @@ class SheapGamer_RSS_Fetcher {
         
         return false;
     }
+
+    /**
+     * Consolidates API calls into a single request to save quota.
+     * Fetches Title, Excerpt, Slug, and Tags in one go.
+     */
+    private function _get_gemini_consolidated_data( $original_title, $content, $api_key ) {
+        $this->_log_message( 'Attempting to fetch consolidated metadata (Title, Excerpt, Slug, Tags) from Gemini API.', 'info' );
+
+        // Truncate content for the prompt to avoid hitting token limits while keeping enough context
+        $content_for_prompt = wp_trim_words( strip_tags( $content ), 500, '...' );
+
+        $prompt = "Analyze the following WordPress post content. Your task is to generate SEO metadata in a specific JSON format.\n\n"
+                . "REQUIREMENTS:\n"
+                . "1. title: A concise, descriptive, and human-readable **Thai** title (max 15 words).\n"
+                . "2. excerpt: A concise, engaging **Thai** summary/excerpt (max 90 words).\n"
+                . "3. slug: A concise, SEO-friendly, URL-safe slug (English, lowercase, words separated by hyphens).\n"
+                . "4. tags: A comma-separated list of 5-7 highly relevant tags.\n\n"
+                . "IMPORTANT: Your response must be ONLY a valid JSON object. Do not include markdown formatting (like ```json) or any other text. \n\n"
+                . "JSON SCHEMA:\n"
+                . "{\"title\": \"...\", \"excerpt\": \"...\", \"slug\": \"...\", \"tags\": \"...\"}\n\n"
+                . "--- POST DATA ---\n"
+                . "Original Title: \"{$original_title}\"\n"
+                . "Content: \"{$content_for_prompt}\"";
+
+        // Use your existing _call_gemini_api helper (it handles the fallback/retries perfectly)
+        $data = $this->_call_gemini_api( $prompt, $api_key, 'consolidated metadata generation' );
+
+        if ( ! $data ) {
+            return false;
+        }
+
+        $text_content = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
+
+        if ( empty( $text_content ) ) {
+            $this->_log_message( 'Gemini API response was empty.', 'error' );
+            return false;
+        }
+
+        // Clean up the response (remove markdown code fences if Gemini adds them)
+        $json_string = trim( str_replace( array( '```json', '```' ), '', $text_content ) );
+        
+        // Decode JSON
+        $result = json_decode( $json_string, true );
+
+        if ( json_last_error() !== JSON_ERROR_NONE ) {
+            $this->_log_message( 'Failed to decode JSON from Gemini response. Response: ' . esc_html( substr($json_string, 0, 200) ) . '...', 'error' );
+            return false;
+        }
+
+        return $result;
+    }
     
     /**
      * Gets title suggestion from the Gemini API.
@@ -554,56 +605,28 @@ class SheapGamer_RSS_Fetcher {
         return sanitize_text_field($suggested_title);
     }
 
-    /**
+   /**
      * Gets excerpt suggestion from the Gemini API.
      */
     private function _get_gemini_excerpt_suggestion( $post_content, $api_key ) {
         $this->_log_message( 'Attempting to get excerpt suggestion from Gemini API.', 'info' );
 
-        $api_url = 'https://generativelanguage.googleapis.com/v1beta/models/' . self::GEMINI_VERSION . ':generateContent?key=' . $api_key;
-
         // Truncate content for prompt if too long, as excerpts are short summaries
-        $content_for_prompt = wp_trim_words(strip_tags($post_content), 300, '...'); // Use a larger snippet for excerpt generation
+        $content_for_prompt = wp_trim_words(strip_tags($post_content), 300, '...'); 
 
         $prompt = "Summarize the following WordPress post content into a concise, engaging, 
-                    and SEO-friendly Thai excerpt (maximum 50 words). 
+                    and SEO-friendly Thai excerpt (maximum 80 words). 
                     Do not include any HTML tags or markdown. 
                     Provide only the Thai excerpt, nothing else.\n\n"
                 . "Post Content: \"{$content_for_prompt}\"\n\n"
                 . "Excerpt:";
 
-        $body = array(
-            'contents' => array(
-                array(
-                    'parts' => array(
-                        array('text' => $prompt)
-                    )
-                )
-            )
-        );
+        // Use the helper function to benefit from fallback/retry logic
+        $data = $this->_call_gemini_api( $prompt, $api_key, 'excerpt generation' );
 
-        $args = array(
-            'body'    => json_encode($body),
-            'headers' => array('Content-Type' => 'application/json'),
-            'timeout' => 60, // Increase timeout for AI API calls
-        );
-
-        $response = wp_remote_post( $api_url, $args );
-
-        if ( is_wp_error( $response ) ) {
-            $this->_log_message( 'Gemini API request for excerpt failed: ' . $response->get_error_message(), 'error' );
+        if ( ! $data ) {
             return false;
         }
-
-        $response_code = wp_remote_retrieve_response_code( $response );
-        $response_body = wp_remote_retrieve_body( $response );
-
-        if ( $response_code !== 200 ) {
-            $this->_log_message( "Gemini API for excerpt returned non-200 status: {$response_code}. Body: " . esc_html($response_body), 'error' );
-            return false;
-        }
-        
-        $data = json_decode($response_body, true);
         
         $suggested_excerpt_raw = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
         
@@ -614,19 +637,15 @@ class SheapGamer_RSS_Fetcher {
         
         // Clean up the suggested excerpt (remove quotes if Gemini adds them, trim whitespace, limit words)
         $suggested_excerpt = trim( $suggested_excerpt_raw, '" ' );
-        $suggested_excerpt = wp_trim_words( $suggested_excerpt, 55, '' ); // Ensure it's not too long
 
         return sanitize_text_field($suggested_excerpt);
     }
 
-
     /**
      * Gets slug and tag suggestions from the Gemini API.
      */
-    private function _get_gemini_suggestions( $title, $content, $api_key ) {
+    private function _get_gemini_slug_and_tags_suggestions( $title, $content, $api_key ) {
         $this->_log_message( 'Attempting to fetch slug and tag suggestions from Gemini API.', 'info' );
-
-        $api_url = 'https://generativelanguage.googleapis.com/v1beta/models/' . self::GEMINI_VERSION . ':generateContent?key=' . $api_key;
 
         // Create a precise prompt asking for a JSON response
         $prompt = "Analyze the following WordPress post title and content. Your task is to provide two things:\n"
@@ -639,38 +658,12 @@ class SheapGamer_RSS_Fetcher {
                 . "Title: \"{$title}\"\n"
                 . "Content: \"{$content}\"";
 
-        $body = array(
-            'contents' => array(
-                array(
-                    'parts' => array(
-                        array('text' => $prompt)
-                    )
-                )
-            )
-        );
+        // Use the helper function to benefit from fallback/retry logic
+        $data = $this->_call_gemini_api( $prompt, $api_key, 'slug/tags generation' );
 
-        $args = array(
-            'body'    => json_encode($body),
-            'headers' => array('Content-Type' => 'application/json'),
-            'timeout' => 60, // Increase timeout for AI API calls
-        );
-
-        $response = wp_remote_post( $api_url, $args );
-
-        if ( is_wp_error( $response ) ) {
-            $this->_log_message( 'Gemini API request for slug/tags failed: ' . $response->get_error_message(), 'error' );
+        if ( ! $data ) {
             return false;
         }
-
-        $response_code = wp_remote_retrieve_response_code( $response );
-        $response_body = wp_remote_retrieve_body( $response );
-
-        if ( $response_code !== 200 ) {
-            $this->_log_message( "Gemini API for slug/tags returned non-200 status: {$response_code}. Body: " . esc_html($response_body), 'error' );
-            return false;
-        }
-        
-        $data = json_decode($response_body, true);
         
         $text_content = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
 
@@ -679,7 +672,7 @@ class SheapGamer_RSS_Fetcher {
             return false;
         }
         
-        // Remove markdown code block fences if Gemini adds them
+        // Remove markdown code block fences if Gemini adds them (common with JSON requests)
         $json_string = trim( str_replace( array('```json', '```'), '', $text_content ) );
         $suggestions = json_decode( $json_string, true );
 
@@ -692,10 +685,9 @@ class SheapGamer_RSS_Fetcher {
     }
 
     /**
-     * Creates a new WordPress post from RSS data.
+     * Creates a new WordPress post from RSS data (Optimized).
      */
     private function _create_wordpress_post( $rss_item ) {
-        // Check for existing post by GUID first to prevent duplicates
         $existing_post_id = $this->_get_existing_post_by_rss_guid( $rss_item['id'] );
         if ( $existing_post_id ) {
             $log_message = sprintf( 
@@ -710,28 +702,22 @@ class SheapGamer_RSS_Fetcher {
 
         $raw_post_content = ! empty( $rss_item['content'] ) ? $rss_item['content'] : '';
         $processed_content = str_replace( array('<br>', '<br/>', '<br />'), "\n", $raw_post_content );
-
-        //auto add hyperlinks using make_clickable
         $processed_content = make_clickable( $processed_content );
-        
         $content_lines = explode("\n", $processed_content, 2);
         
-        // 1. Post Title Creation: Pull from content until first <br> tag
         $post_title = trim(strip_tags($content_lines[0] ?? ''));
         if (empty($post_title)) {
-            // Fallback if the first line is empty after stripping tags
             $post_title = ! empty( $rss_item['title'] ) ? $rss_item['title'] : '';
         }
-        $original_post_title_for_log = $post_title; // Store for logging purposes
+        $original_post_title_for_log = $post_title;
 
-
-        // --- NEW: Category Assignment Logic ---
         $post_category_id = self::ID_CATEGORIES['meme']; // Default to 'meme'
         $category_name = 'meme';
         $category_log_message = __( 'Defaulted to category "meme".', 'sheapgamer-rss-fetcher' );
 
         // Check if title or content starts with "https" - categorize as Deal
-        if ( preg_match('/^https/i', $post_title) || preg_match('/^https/i', trim($raw_post_content)) ) {
+        if ( preg_match('/^https/i', $post_title) || preg_match('/^https/i', trim($raw_post_content)) 
+            || str_contains($post_title, '[Deal]') || str_contains($post_title, '[Deals]') ) {
             $post_category_id = self::ID_CATEGORIES['deals'];
             $category_name = 'deals';
             $category_log_message = __( 'Detected URL at start, assigned "deals" category.', 'sheapgamer-rss-fetcher' );
@@ -764,14 +750,15 @@ class SheapGamer_RSS_Fetcher {
         }
         // --- END: Category Assignment Logic ---
 
-        // 2. Post Content: Remove content until hit first <br> tag
+
+        // Post Content: Remove content until hit first <br> tag
         $final_content_raw = $content_lines[1] ?? ''; // The rest of the content after the first <br>
         $final_content_raw = strip_tags( $final_content_raw, '<a><p><h1><h2><h3><h4><h5><h6>' ); // Keep basic formatting tags
         $final_content_raw = preg_replace("/\n{3,}/", "\n\n", $final_content_raw);
         $plain_text_content = strip_tags($final_content_raw); // Use plain text for AI analysis
 
-        // --- Additional Check: Detect "ลดราคา" (discount) keyword as final check ---
         // This runs after category prefix detection and can change meme to deals
+        // --- Additional Check: Detect "ลดราคา" (discount) keyword as final check ---
         if ( ( str_contains($post_title, 'ลดราคา') || str_contains($plain_text_content, 'ลดราคา') ) ) {
             if ( $category_name === 'meme' || $category_name === 'deals' ) {
                 $post_category_id = self::ID_CATEGORIES['deals'];
@@ -780,142 +767,124 @@ class SheapGamer_RSS_Fetcher {
             }
         }
 
+        // --- GEMINI OPTIMIZATION START ---
         $gemini_api_key = get_option('sheapgamer_gemini_api_key');
+        
+        // Initialize default variables
+        $suggested_title = '';
+        $suggested_excerpt = '';
+        $suggested_slug = '';
+        $suggested_tags = '';
+        $ai_data = false;
 
-        // --- Conditional Gemini Title Suggestion ---
-        // Check if title is empty (discarded URL) or problematic
+        // 1. CALL GEMINI ONCE
+        if ( !empty($gemini_api_key) ) {
+            $ai_data = $this->_get_gemini_consolidated_data( $post_title, $plain_text_content, $gemini_api_key );
+            
+            if ( $ai_data ) {
+                $suggested_title   = $ai_data['title'] ?? '';
+                $suggested_excerpt = $ai_data['excerpt'] ?? '';
+                $suggested_slug    = $ai_data['slug'] ?? '';
+                $suggested_tags    = $ai_data['tags'] ?? '';
+            }
+        }
+
+        // 2. PROCESS TITLE
+        // Only use the AI title if the original is "weird" OR if the original was empty/URL-based
         $is_weird_title = empty($post_title) || 
                           preg_match('/https?:\/\/(www\.)?|www\./i', $post_title) || 
                           strlen($post_title) < 10 || 
-                          str_contains(strtolower($post_title), 'untitled') ||
-                          str_contains(strtolower($post_title), 'default title'); // Add more patterns if needed
+                          str_contains(strtolower($post_title), 'untitled');
 
-        if ( $is_weird_title && !empty($gemini_api_key) ) {
-            $suggested_title = $this->_get_gemini_title_suggestion($post_title, $plain_text_content, $gemini_api_key);
-            if ( $suggested_title ) {
-                $this->_log_message(sprintf(__('Original title "%s" considered problematic. Replaced with AI-suggested title: "%s".', 'sheapgamer-rss-fetcher'), esc_html($original_post_title_for_log), esc_html($suggested_title)), 'info');
-                $post_title = $suggested_title;
-            } else {
-                $this->_log_message(sprintf(__('Could not get AI title suggestion for "%s". Using original cleaned title.', 'sheapgamer-rss-fetcher'), esc_html($original_post_title_for_log)), 'warning');
-                // Fallback to existing cleaning/trimming if AI fails
-                if ( empty($post_title) ) {
-                    $post_title = __( 'RSS Post', 'sheapgamer-rss-fetcher' ) . ' ' . uniqid();
-                } else {
-                    $post_title = wp_trim_words( $post_title, 20, '' );
-                }
-                $post_title = sanitize_text_field( $post_title );
-            }
+        if ( $is_weird_title && !empty($suggested_title) ) {
+            $this->_log_message(sprintf(__('Original title "%s" replaced with AI title: "%s".', 'sheapgamer-rss-fetcher'), esc_html($original_post_title_for_log), esc_html($suggested_title)), 'info');
+            $post_title = sanitize_text_field( $suggested_title );
+        } elseif ( empty($post_title) ) {
+             $post_title = __( 'RSS Post', 'sheapgamer-rss-fetcher' ) . ' ' . uniqid();
         } else {
-            // If not a weird title or no API key, use existing cleaning/trimming
-            if ( empty($post_title) ) {
-                $post_title = __( 'RSS Post', 'sheapgamer-rss-fetcher' ) . ' ' . uniqid();
-            } else {
-                $post_title = wp_trim_words( $post_title, 20, '' );
-            }
-            $post_title = sanitize_text_field( $post_title );
+             // If title is fine, just trim it
+             $post_title = wp_trim_words( $post_title, 20, '' );
         }
-        // --- END: Conditional Gemini Title Suggestion ---
 
-        // --- NEW: Gemini Excerpt Suggestion ---
+        // 3. PROCESS EXCERPT but skipped if category is meme
         $post_excerpt = '';
-        if ( !empty($gemini_api_key) && !empty($plain_text_content) ) {
-            $suggested_excerpt = $this->_get_gemini_excerpt_suggestion( $plain_text_content, $gemini_api_key );
-            if ( $suggested_excerpt ) {
-                $post_excerpt = $suggested_excerpt;
-                $this->_log_message(sprintf(__('Generated post excerpt using Gemini AI for post: "%s".', 'sheapgamer-rss-fetcher'), esc_html($post_title)), 'info');
-            } else {
-                $this->_log_message(sprintf(__('Could not generate post excerpt using Gemini AI for post: "%s".', 'sheapgamer-rss-fetcher'), esc_html($post_title)), 'warning');
-            }
-        } else if ( empty($gemini_api_key) ) {
-             $this->_log_message(sprintf(__('Gemini API key not set. Skipping excerpt generation for post: "%s".', 'sheapgamer-rss-fetcher'), esc_html($post_title)), 'info');
-        }
-
-        // Fallback to auto-generated excerpt by WordPress if AI fails or not used
-        if ( empty( $post_excerpt ) && !empty( $plain_text_content ) ) {
-            // Use wp_trim_words to create a default excerpt if AI fails
+        if ( !empty($suggested_excerpt) && $category_name !== 'meme') {
+            $post_excerpt = sanitize_text_field( $suggested_excerpt );
+            // Add the "Highlight" block to content
+            $final_content_raw = '<p style="text-align: center;"><strong>ไฮไลท์บทความ</strong></p>' .
+                                 '<p>' . esc_html( $post_excerpt ) . '</p>' .
+                                 '<br>'.
+                                 '<hr class="wp-block-separator has-alpha-channel-opacity"/>' . $final_content_raw;
+        } else {
+            // Fallback excerpt
             $post_excerpt = wp_trim_words( $plain_text_content, 55, '...' );
         }
-        // --- END: Gemini Excerpt Suggestion ---
 
-
+        // --- STANDARD WORDPRESS INSERTION ---
         $source_link_html = '';
         if ( ! empty( $rss_item['link'] ) ) {
             $source_link_html = "\n\n<p>Source: <a href=\"" . esc_url( $rss_item['link'] ) . "\" target=\"_blank\" rel=\"noopener noreferrer\">" . esc_html( $rss_item['link'] ) . "</a></p>";
         }
-        $final_content = wp_kses_post( $final_content_raw . $source_link_html ); // Use $final_content_raw here
+        $final_content = wp_kses_post( $final_content_raw . $source_link_html );
 
         $new_post_data = array(
-            'post_title'    => $post_title, // Use potentially AI-enhanced title
+            'post_title'    => $post_title,
             'post_content'  => $final_content,
-            'post_excerpt'  => $post_excerpt, // NEW: Add the generated excerpt
+            'post_excerpt'  => $post_excerpt,
             'post_status'   => 'publish',
             'post_type'     => 'post',
             'post_author'   => 5,
             'post_date'     => wp_date( 'Y-m-d H:i:s', $rss_item['date_timestamp'] ),
             'post_date_gmt' => gmdate( 'Y-m-d H:i:s', $rss_item['date_timestamp'] ),
-            'post_category' => array( $post_category_id ), // NEW: Assign the detected category
+            'post_category' => array( $post_category_id ),
         );
 
         $post_id = wp_insert_post( $new_post_data, true );
 
         if ( is_wp_error( $post_id ) ) {
-            $this->_log_message( sprintf( __( 'Failed to create WordPress post for RSS GUID %s: %s', 'sheapgamer-rss-fetcher' ), esc_html($rss_item['id']), $post_id->get_error_message() ), 'error' );
+            $this->_log_message( sprintf( 'Failed to create post: %s', $post_id->get_error_message() ), 'error' );
             return false;
         }
 
-        // --- NEW: Log category assignment ---
-        $this->_log_message( sprintf( '%s (Post ID: %d, Category: %s, ID: %d)', $category_log_message, $post_id, $category_name, $post_category_id ), 'info' );
-
-        // --- Gemini Integration for Tags & Slug ---
-        $gemini_suggestions = false;
+        // 4. PROCESS TAGS AND SLUG
         $tags_array = array();
         $new_slug = '';
 
-        if ( !empty($gemini_api_key) ) {
-            // Pass the potentially AI-enhanced $post_title to the slug/tag generation
-            $gemini_suggestions = $this->_get_gemini_suggestions($post_title, $plain_text_content, $gemini_api_key);
-        }
-
-        if ( $gemini_suggestions && !empty($gemini_suggestions['slug']) && !empty($gemini_suggestions['tags']) ) {
-            // --- Use Gemini Suggestions ---
-            $this->_log_message(sprintf(__('Successfully received slug and tag suggestions from Gemini for post ID %d.', 'sheapgamer-rss-fetcher'), $post_id), 'info');
-            
-            $tags_array = array_map('trim', explode(',', $gemini_suggestions['tags']));
-            $new_slug = sanitize_title($gemini_suggestions['slug']);
-
+        if ( !empty($suggested_tags) && !empty($suggested_slug) ) {
+            // Use AI data
+            $tags_array = array_map('trim', explode(',', $suggested_tags));
+            $new_slug = sanitize_title($suggested_slug);
+            $this->_log_message(sprintf(__('Applied AI slug and tags for post ID %d.', 'sheapgamer-rss-fetcher'), $post_id), 'info');
         } else {
-            // --- FALLBACK to original logic for tags and slug ---
-            if (!empty($gemini_api_key)) {
-                 $this->_log_message(sprintf(__('Could not get slug and tag suggestions from Gemini for post ID %d. Using fallback logic.', 'sheapgamer-rss-fetcher'), $post_id), 'info');
-            } else {
-                 $this->_log_message(sprintf(__('Gemini API key not set. Using fallback logic for post ID %d.', 'sheapgamer-rss-fetcher'), $post_id), 'info');
-            }
-           
-            // Use the (potentially AI-enhanced) $post_title for fallback tag/slug generation
+            // Fallback Logic
             preg_match_all('/\b[a-zA-Z]+\b/', $post_title, $matches);
             $tags_array = array_map('strtolower', array_unique($matches[0]));
             $slug_tags = !empty($tags_array) ? implode('-', $tags_array) : sanitize_title($post_title);
             $new_slug = $post_id . '-' . $slug_tags;
         }
-        
-        // --- Apply Tags and Slug ---
+
+        // Apply Tags
         if (!empty($tags_array)) {
             wp_set_post_tags( $post_id, $tags_array, false );
-            $this->_log_message( sprintf( __( 'Added tags: %s to post ID %d.', 'sheapgamer-rss-fetcher' ), esc_html(implode(', ', $tags_array)), $post_id ), 'info' );
         }
-        
+
+        // Apply Slug
         $final_slug = wp_unique_post_slug( $new_slug, $post_id, 'publish', 'post', 0 );
         wp_update_post( array(
             'ID'        => $post_id,
             'post_name' => $final_slug,
         ));
-        $this->_log_message( sprintf( __( 'Updated post ID %d with slug: %s.', 'sheapgamer-rss-fetcher' ), $post_id, esc_html($final_slug) ), 'info' );
 
+        // Store RSS GUID and original link as post meta
         update_post_meta( $post_id, '_sheapgamer_rss_guid', $rss_item['id'] );
         if ( ! empty( $rss_item['link'] ) ) {
             update_post_meta( $post_id, '_sheapgamer_rss_original_link', esc_url_raw( $rss_item['link'] ) );
         }
 
+        // Log category assignment ---
+        $this->_log_message( sprintf( '%s (Post ID: %d, Category: %s, ID: %d)', $category_log_message, $post_id, $category_name, $post_category_id ), 'info' );
+
+        // Log success
         $post_link = get_edit_post_link($post_id, 'raw');
         $success_message = sprintf( 
             __( 'Created WordPress post "<a href="%s" target="_blank">%s</a>" (ID: %d) from RSS GUID %s.', 'sheapgamer-rss-fetcher' ), 
@@ -932,7 +901,6 @@ class SheapGamer_RSS_Fetcher {
 
         return $post_id;
     }
-
     /**
      * Checks if a WordPress post with the given RSS GUID already exists.
      */
@@ -965,6 +933,7 @@ class SheapGamer_RSS_Fetcher {
         if ( empty( $feed_url ) || ! filter_var( $feed_url, FILTER_VALIDATE_URL ) ) {
             $message = __( 'RSS Feed URL is missing or invalid in settings. Process aborted.', 'sheapgamer-rss-fetcher' );
             $this->_log_message( $message, 'error' );
+             $this->_log_message( __( $message, 'sheapgamer-rss-fetcher' ), 'error' );
             return array( 'message' => $message, 'created_count' => 0, 'status' => 'error' );
         }
 
