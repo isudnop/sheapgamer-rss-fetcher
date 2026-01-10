@@ -3,7 +3,7 @@
  * Plugin Name: SheapGamer RSS Content Fetcher
  * Plugin URI: https://sheapgamer.com/
  * Description: Fetches posts from a specified RSS Feed URL and creates WordPress posts. Now with Gemini AI for automatic slug/tag generation and category assignment. Includes hourly cron job.
- * Version: 1.9.2
+ * Version: 1.10.0
  * Author: Nop SheapGamer
  * Author URI: https://sheapgamer.com/
  * License: GPL2
@@ -364,13 +364,13 @@ class SheapGamer_RSS_Fetcher {
     }
 
     /**
-     * Downloads an image and sets it as the featured image for a post.
+     * Downloads an image, converts it to WebP, and sets it as the featured image.
      */
     private function _set_featured_image_from_url( $image_url, $post_id, $alt_text = '' ) {
         if ( empty( $image_url ) ) {
             return false;
         }
-        
+
         require_once( ABSPATH . 'wp-admin/includes/image.php' );
         require_once( ABSPATH . 'wp-admin/includes/file.php' );
         require_once( ABSPATH . 'wp-admin/includes/media.php' );
@@ -399,44 +399,97 @@ class SheapGamer_RSS_Fetcher {
 
         $image_data = wp_remote_retrieve_body( $response );
         $upload_dir = wp_upload_dir();
+        
+        // Extract filename and extension
         $parsed_url_path = parse_url($image_url, PHP_URL_PATH);
         $original_filename = wp_basename($parsed_url_path);
+        $file_info = pathinfo($original_filename);
+        $base_name = $file_info['filename'];
         
-        // Ensure the filename is unique in the upload directory
-        $unique_filename = wp_unique_filename( $upload_dir['path'], $original_filename );
-        $new_file = $upload_dir['path'] . '/' . $unique_filename;
+        // --- WEBP CONVERSION START ---
+        $saved_as_webp = false;
+        $final_filename = $original_filename; // Default to original if conversion fails
+        $new_file_path = '';
 
-        if ( false === file_put_contents( $new_file, $image_data ) ) {
-            $this->_log_message( sprintf( __( 'Failed to save downloaded image to %s for %s.', 'sheapgamer-rss-fetcher' ), $new_file, esc_url($image_url) ), 'error' );
-            return false;
+        // Check if GD is installed and supports WebP
+        if ( function_exists('imagecreatefromstring') && function_exists('imagewebp') ) {
+            // Suppress errors for invalid image data
+            $image_resource = @imagecreatefromstring( $image_data );
+            
+            if ( $image_resource !== false ) {
+                // Set target filename with .webp extension
+                $webp_filename = $base_name . '.webp';
+                $unique_filename = wp_unique_filename( $upload_dir['path'], $webp_filename );
+                $new_file_path = $upload_dir['path'] . '/' . $unique_filename;
+                
+                // Handle Transparency (Crucial for converting PNG to WebP)
+                imagepalettetotruecolor( $image_resource );
+                imagealphablending( $image_resource, true );
+                imagesavealpha( $image_resource, true );
+
+                // Save as WebP with 80% quality
+                $success = imagewebp( $image_resource, $new_file_path, 80 );
+                imagedestroy( $image_resource );
+
+                if ( $success ) {
+                    $saved_as_webp = true;
+                    $final_filename = $unique_filename;
+                    $this->_log_message( sprintf( __( 'Converted image to WebP: %s', 'sheapgamer-rss-fetcher' ), $unique_filename ), 'info' );
+                }
+            } else {
+                $this->_log_message( sprintf( __( 'Could not process image resource for WebP conversion (URL: %s). Falling back to original.', 'sheapgamer-rss-fetcher' ), esc_url($image_url) ), 'warning' );
+            }
+        }
+        // --- WEBP CONVERSION END ---
+
+        // If WebP conversion failed or wasn't attempted, save the original raw data
+        if ( ! $saved_as_webp ) {
+            $unique_filename = wp_unique_filename( $upload_dir['path'], $original_filename );
+            $new_file_path = $upload_dir['path'] . '/' . $unique_filename;
+            
+            if ( false === file_put_contents( $new_file_path, $image_data ) ) {
+                $this->_log_message( sprintf( __( 'Failed to save downloaded image to %s for %s.', 'sheapgamer-rss-fetcher' ), $new_file_path, esc_url($image_url) ), 'error' );
+                return false;
+            }
+            $final_filename = $unique_filename;
         }
 
+        // Prepare for sideloading
         $file_array = array(
-            'name'     => $unique_filename,
-            'tmp_name' => $new_file,
+            'name'     => $final_filename,
+            'tmp_name' => $new_file_path,
         );
+
+        // Add specific mime type if it is WebP to ensure WordPress handles it correctly
+        if ( $saved_as_webp ) {
+            $file_array['type'] = 'image/webp';
+        }
 
         $attachment_id = media_handle_sideload( $file_array, $post_id, $alt_text );
 
-        if ( file_exists( $new_file ) ) {
-            @unlink( $new_file );
-        }
-
+        // If sideload failed, try to clean up the file
         if ( is_wp_error( $attachment_id ) ) {
+            @unlink( $new_file_path );
             $this->_log_message( sprintf( __( 'Failed to sideload image from %s: %s', 'sheapgamer-rss-fetcher' ), esc_url($image_url), $attachment_id->get_error_message() ), 'error' );
             return false;
         }
 
+        // Success: Set the featured image
         set_post_thumbnail( $post_id, $attachment_id );
         
         if ( ! empty( $alt_text ) ) {
             update_post_meta( $attachment_id, '_wp_attachment_image_alt', sanitize_text_field( $alt_text ) );
         }
 
-        $this->_log_message( sprintf( __( 'Successfully set featured image for post ID %d from %s.', 'sheapgamer-rss-fetcher' ), $post_id, esc_url($image_url) ), 'success' );
+        $log_msg = $saved_as_webp 
+            ? sprintf( __( 'Successfully set featured image (WebP) for post ID %d from %s.', 'sheapgamer-rss-fetcher' ), $post_id, esc_url($image_url) )
+            : sprintf( __( 'Successfully set featured image (Original) for post ID %d from %s.', 'sheapgamer-rss-fetcher' ), $post_id, esc_url($image_url) );
+
+        $this->_log_message( $log_msg, 'success' );
+        
         return $attachment_id;
     }
-    
+
     /**
      * Makes a Gemini API request with automatic fallback on rate limit.
      * 
@@ -717,7 +770,7 @@ class SheapGamer_RSS_Fetcher {
             $final_content_raw = '<p style="text-align: center;"><strong>ไฮไลท์บทความ</strong></p>' .
                                  '<p>' . esc_html( $post_excerpt ) . '</p>' .
                                  '<br>'.
-                                 '<hr class="wp-block-separator has-alpha-channel-opacity"/>' . $final_content_raw;
+                                 '<hr class="wp-block-separator has-alpha-channel-opacity"/>' . '<p>' . $final_content_raw . '</p>' ;
         } else {
             // Fallback excerpt
             $post_excerpt = wp_trim_words( $plain_text_content, 55, '...' );
@@ -728,7 +781,7 @@ class SheapGamer_RSS_Fetcher {
         if ( ! empty( $rss_item['link'] ) ) {
             $source_link_html = "\n\n<p>Source: <a href=\"" . esc_url( $rss_item['link'] ) . "\" target=\"_blank\" rel=\"noopener noreferrer\">" . esc_html( $rss_item['link'] ) . "</a></p>";
         }
-        $final_content = wp_kses_post( '<p>' . $final_content_raw . $source_link_html . '</p>' );
+        $final_content = wp_kses_post($final_content_raw . $source_link_html);
 
         $new_post_data = array(
             'post_title'    => $post_title,
